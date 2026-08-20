@@ -52,15 +52,41 @@ auth_header() {
 }
 
 # fetch <url> <accept> <output-path>
+# Records the HTTP status in $http_status so callers can explain *why* a
+# request failed, rather than guessing.
+http_status=""
 fetch() {
   url="$1"; accept="$2"; out="$3"
   auth="$(auth_header)"
   if [ -n "$auth" ]; then
-    curl -fsSL -H "$auth" -H "Accept: $accept" -o "$out" "$url" && return 0
+    http_status="$(curl -sSL -w '%{http_code}' -H "$auth" -H "Accept: $accept" -o "$out" "$url" || echo 000)"
   else
-    curl -fsSL -H "Accept: $accept" -o "$out" "$url" && return 0
+    http_status="$(curl -sSL -w '%{http_code}' -H "Accept: $accept" -o "$out" "$url" || echo 000)"
   fi
-  return 1
+  case "$http_status" in
+    2*) return 0 ;;
+    *)  return 1 ;;
+  esac
+}
+
+# Explain a failed GitHub request in terms of what actually went wrong.
+explain_github_failure() {
+  case "$http_status" in
+    404)
+      die "$REPO has no releases, or is private.
+  If it is private, export a token with \`repo\` scope and re-run:
+    curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | GITHUB_TOKEN=… sh" ;;
+    403|429)
+      if [ -n "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ]; then
+        die "GitHub refused the request (HTTP $http_status). The token may lack \`repo\` scope."
+      fi
+      die "GitHub rate-limited this IP (unauthenticated requests are capped at 60/hour).
+  Wait a few minutes, or export GITHUB_TOKEN and re-run." ;;
+    000)
+      die "could not reach GitHub. Check your network or proxy settings." ;;
+    *)
+      die "GitHub returned HTTP $http_status for $REPO" ;;
+  esac
 }
 
 # asset_id_for <release-json> <asset-name>
@@ -92,14 +118,7 @@ main() {
     api="https://api.github.com/repos/$REPO/releases/latest"
   fi
 
-  if ! fetch "$api" "application/vnd.github+json" "$tmp/release.json"; then
-    if [ -z "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ]; then
-      die "could not read releases for $REPO.
-  If the repository is private, export GITHUB_TOKEN with \`repo\` scope and re-run:
-    curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | GITHUB_TOKEN=… sh"
-    fi
-    die "could not read releases for $REPO (is the token valid?)"
-  fi
+  fetch "$api" "application/vnd.github+json" "$tmp/release.json" || explain_github_failure
 
   version="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' "$tmp/release.json" | head -1)"
   [ -n "$version" ] || die "no published release found for $REPO"
@@ -118,14 +137,14 @@ main() {
   dim "downloading $asset"
   fetch "https://api.github.com/repos/$REPO/releases/assets/$asset_id" \
         "application/octet-stream" "$tmp/$asset" \
-    || die "download failed"
+    || explain_github_failure
 
   # Verify before unpacking: this binary will later run with your API key and
   # your browser session.
   if [ -n "$sums_id" ]; then
     fetch "https://api.github.com/repos/$REPO/releases/assets/$sums_id" \
           "application/octet-stream" "$tmp/checksums.txt" \
-      || die "could not download checksums.txt"
+      || explain_github_failure
 
     expected="$(grep -F " $asset" "$tmp/checksums.txt" | awk '{print $1}' | head -1)"
     [ -n "$expected" ] || die "$asset is not listed in checksums.txt"

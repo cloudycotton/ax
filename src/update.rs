@@ -168,17 +168,28 @@ async fn http(url: &str, accept: &str) -> Result<Vec<u8>> {
 
     let response = request.send().await.with_context(|| format!("GET {url}"))?;
     let status = response.status();
-    if status == reqwest::StatusCode::NOT_FOUND {
-        bail!(
-            "GitHub returned 404 for {url}\n\
-             If {} is private, set GITHUB_TOKEN to a token with `repo` scope.",
+    if status.is_success() {
+        return Ok(response.bytes().await?.to_vec());
+    }
+
+    // Say what actually went wrong. The two common failures look nothing alike
+    // to a user but both arrive as an error status.
+    let authenticated = github_token().is_some();
+    match status.as_u16() {
+        404 => bail!(
+            "{} has no releases, or is private.\n\
+             If it is private, set GITHUB_TOKEN to a token with `repo` scope.",
             repo()
-        );
+        ),
+        403 | 429 if !authenticated => bail!(
+            "GitHub rate-limited this IP (unauthenticated requests are capped at 60/hour).\n\
+             Wait a few minutes, or set GITHUB_TOKEN."
+        ),
+        403 | 429 => {
+            bail!("GitHub refused the request ({status}); the token may lack `repo` scope.")
+        }
+        _ => bail!("GitHub returned {status} for {url}"),
     }
-    if !status.is_success() {
-        bail!("GitHub returned {status} for {url}");
-    }
-    Ok(response.bytes().await?.to_vec())
 }
 
 fn github_token() -> Option<String> {

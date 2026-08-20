@@ -1,6 +1,6 @@
 [package]
 name = "ax"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 # Not `as`: that is both a Rust keyword and the system assembler at /usr/bin/as,
