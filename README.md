@@ -23,9 +23,26 @@ ax attach <id>        # replay everything it has done, then follow live
 ax update             # upgrade in place from the latest release
 ```
 
-Configuration can also come from the environment, which wins over the saved
-file: `AX_API_KEY`, `AX_BASE_URL`, `AX_MODEL` (or `OPENAI_API_KEY` /
-`OPENAI_BASE_URL`).
+## Providers and models
+
+Setup asks where to send requests, takes your key, then lists the models the
+provider actually serves — you pick from that list rather than typing an id
+from memory. Every answer is written to `~/.ax/config.toml` (mode 600) the
+moment you give it, so a wizard you abandon halfway loses nothing.
+
+Keep as many providers as you like — a paid one for real work, a local model
+for cheap iteration — and switch between them:
+
+```bash
+ax model              # pick a model from what this provider offers
+ax provider           # switch between saved providers, or add one
+ax config             # what is configured (keys redacted)
+ax setup              # add or reconfigure a provider
+```
+
+`ax model gpt-4.1` and `ax provider local` set things directly, without the
+picker. Environment variables still win over the saved config, which is what
+lets a one-off `AX_MODEL=o3 ax run "…"` work.
 
 
 Sessions belong to a background daemon, not to your terminal: close the window

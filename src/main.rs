@@ -76,8 +76,20 @@ enum Command {
     },
     /// Delete a session and everything it recorded.
     Rm { id: String },
-    /// Configure the endpoint, API key, and model.
+    /// Configure a provider: endpoint, API key, and model.
     Setup,
+    /// Switch model, choosing from what the provider offers.
+    Model {
+        /// Set this model directly instead of choosing from a list.
+        name: Option<String>,
+    },
+    /// Switch between saved providers, or add and remove them.
+    Provider {
+        /// Activate this profile directly instead of choosing from a list.
+        name: Option<String>,
+    },
+    /// Show the current configuration.
+    Config,
     /// Update ax to the latest release.
     Update {
         /// Report whether an update exists without installing it.
@@ -102,7 +114,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     // Every command reads its credentials the same way, including when launchd
     // starts the daemon with no shell environment at all.
-    config::load_env_file()?;
+    config::apply_active_profile()?;
+    setup::install_render_config();
 
     let Some(command) = cli.command else {
         return welcome().await;
@@ -141,6 +154,9 @@ async fn main() -> Result<()> {
         Command::Log { id, follow } => show_log(&id, follow).await,
         Command::Rm { id } => remove(&id),
         Command::Setup => setup::run(true).await,
+        Command::Model { name } => setup::choose_model(name).await,
+        Command::Provider { name } => setup::choose_provider(name).await,
+        Command::Config => setup::show_config(),
         Command::Update { check } => update::run(check).await,
         Command::Pair => pair(),
         Command::Js { code, timeout } => scratch_js(&code.join(" "), timeout).await,
@@ -425,18 +441,15 @@ async fn stop(id: &str) -> Result<()> {
 
 /// Capture the current configuration and register the launchd agent.
 fn install() -> Result<()> {
-    let saved = config::save_env_file()?;
-    if saved.is_empty() {
-        println!(
+    // The daemon reads ~/.ax/config.toml itself, so there is nothing to copy
+    // unless credentials exist only in this shell.
+    match config::capture_shell_credentials()? {
+        Some(name) => println!("saved this shell's credentials as profile `{name}`"),
+        None if !config::is_configured() => println!(
             "{}",
-            ui::dim("warning: no AX_API_KEY in this shell — set one and re-run `ax install`")
-        );
-    } else {
-        println!(
-            "saved {} to {}",
-            saved.join(", "),
-            config::env_file()?.display()
-        );
+            ui::dim("warning: ax is not configured yet — run `ax setup` so the daemon can work")
+        ),
+        None => {}
     }
 
     let path = launchd::install()?;

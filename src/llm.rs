@@ -8,7 +8,7 @@
 //! function-calling still work via the fenced-code fallback in
 //! [`Completion::from_parts`].
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -245,6 +245,57 @@ impl LlmClient {
                 }
             }
         }])
+    }
+
+    /// Ask the provider what models it offers.
+    ///
+    /// `/models` is part of the OpenAI-compatible surface, but plenty of
+    /// gateways and local servers omit it or shape it differently, so callers
+    /// must be ready to fall back to asking the user to type a name.
+    pub async fn list_models(&self) -> Result<Vec<String>> {
+        let response = self
+            .http
+            .get(format!("{}/models", self.config.base_url))
+            .bearer_auth(&self.config.api_key)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .context("could not reach the endpoint")?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            bail!(
+                "{status}: {}",
+                body.trim().chars().take(200).collect::<String>()
+            );
+        }
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).context("the model list was not JSON")?;
+        // Most servers answer {"data":[{"id":…}]}; a few answer a bare array.
+        let entries = parsed
+            .get("data")
+            .and_then(|d| d.as_array())
+            .or_else(|| parsed.as_array())
+            .ok_or_else(|| anyhow!("the model list had no `data` array"))?;
+
+        let mut models: Vec<String> = entries
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .get("id")
+                    .or_else(|| entry.get("name"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        models.sort();
+        models.dedup();
+        if models.is_empty() {
+            bail!("the endpoint returned an empty model list");
+        }
+        Ok(models)
     }
 
     /// One cheap, non-streaming request to prove the endpoint, key, and model

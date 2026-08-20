@@ -1,133 +1,70 @@
-//! Configuration the daemon can read without a shell.
+//! Making the active profile visible to the rest of the program.
 //!
-//! launchd starts the daemon with almost no environment, so the API key and
-//! model cannot come from the user's profile. They live in `~/.ax/env`
-//! instead — mode 600, one `KEY=value` per line — which also keeps secrets out
-//! of the launchd plist, where they would sit world-readable.
+//! Configuration lives in `~/.ax/config.toml` (see [`crate::profile`]). Every
+//! command applies the active profile to the process environment at startup,
+//! which keeps one rule true everywhere: an explicit variable in the shell
+//! always wins over the saved profile. That matters most for the daemon, which
+//! launchd starts with almost no environment at all.
 
-use crate::paths;
-use anyhow::{Context, Result};
-use std::path::PathBuf;
+use crate::profile::Config;
+use anyhow::Result;
 
-/// Variables worth carrying across into the daemon.
-const CARRIED: &[&str] = &[
-    "AX_API_KEY",
-    "AX_BASE_URL",
-    "AX_MODEL",
-    "AX_CHROME",
-    "OPENAI_API_KEY",
-    "OPENAI_BASE_URL",
-];
+/// Apply the active profile to this process, without overriding anything the
+/// shell already set.
+pub fn apply_active_profile() -> Result<()> {
+    let config = Config::load()?;
+    let Some(profile) = config.active_profile() else {
+        return Ok(());
+    };
+    set_if_absent("AX_BASE_URL", &profile.base_url);
+    set_if_absent("AX_API_KEY", &profile.api_key);
+    set_if_absent("AX_MODEL", &profile.model);
+    Ok(())
+}
 
-/// Is there enough configuration to talk to a model? Checks the live
-/// environment and the env file, so it is accurate before `load_env_file`.
+fn set_if_absent(key: &str, value: &str) {
+    if value.is_empty() || std::env::var_os(key).is_some() {
+        return;
+    }
+    // Safety: called once during startup, before any threads are spawned.
+    unsafe { std::env::set_var(key, value) };
+}
+
+/// Is there a usable profile, or credentials in the environment?
 pub fn is_configured() -> bool {
     if std::env::var("AX_API_KEY").is_ok() || std::env::var("OPENAI_API_KEY").is_ok() {
         return true;
     }
-    let Ok(values) = read_env_file() else {
-        return false;
-    };
-    values.iter().any(|(key, value)| {
-        matches!(key.as_str(), "AX_API_KEY" | "OPENAI_API_KEY") && !value.is_empty()
-    })
+    Config::load()
+        .map(|config| config.active_profile().is_some_and(|p| p.is_usable()))
+        .unwrap_or(false)
 }
 
-/// The env file's contents, in file order. Comments and blanks are dropped.
-pub fn read_env_file() -> Result<Vec<(String, String)>> {
-    let path = env_file()?;
-    let Ok(contents) = std::fs::read_to_string(&path) else {
-        return Ok(Vec::new());
-    };
-    Ok(contents
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                return None;
-            }
-            let (key, value) = line.split_once('=')?;
-            Some((key.trim().to_string(), value.trim().to_string()))
-        })
-        .collect())
-}
-
-/// Merge values into the env file, leaving keys we were not asked about
-/// untouched. An empty value removes the key.
-pub fn write_env_values(updates: &[(String, String)]) -> Result<()> {
-    let mut values = read_env_file()?;
-    for (key, value) in updates {
-        match values.iter_mut().find(|(existing, _)| existing == key) {
-            Some(slot) => slot.1 = value.clone(),
-            None => values.push((key.clone(), value.clone())),
-        }
+/// If the shell has credentials but nothing is saved, capture them so the
+/// daemon — which gets no shell environment — can use them too.
+pub fn capture_shell_credentials() -> Result<Option<String>> {
+    let mut config = Config::load()?;
+    if config.active_profile().is_some_and(|p| p.is_usable()) {
+        return Ok(None);
     }
-    values.retain(|(_, value)| !value.is_empty());
-    write_all(&values)
-}
 
-fn write_all(values: &[(String, String)]) -> Result<()> {
-    let path = env_file()?;
-    paths::ensure_dir(path.parent().unwrap())?;
-    let mut body =
-        String::from("# Written by `ax setup`. Read at startup, including by the daemon.\n");
-    for (key, value) in values {
-        body.push_str(&format!("{key}={value}\n"));
+    let key = std::env::var("AX_API_KEY")
+        .or_else(|_| std::env::var("OPENAI_API_KEY"))
+        .unwrap_or_default();
+    if key.is_empty() {
+        return Ok(None);
     }
-    std::fs::write(&path, body).with_context(|| format!("could not write {}", path.display()))?;
-    restrict(&path);
-    Ok(())
-}
 
-/// The file holds an API key, so it must not be readable by other users.
-fn restrict(path: &std::path::Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
-}
-
-pub fn env_file() -> Result<PathBuf> {
-    Ok(paths::agent_home()?.join("env"))
-}
-
-/// Apply `~/.ax/env`, without overriding anything already set in the real
-/// environment — an explicit variable in the shell should always win.
-pub fn load_env_file() -> Result<()> {
-    let path = env_file()?;
-    let Ok(contents) = std::fs::read_to_string(&path) else {
-        return Ok(());
-    };
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let (key, value) = (key.trim(), value.trim());
-        if key.is_empty() || std::env::var_os(key).is_some() {
-            continue;
-        }
-        // Safety: called once during startup, before any threads are spawned.
-        unsafe { std::env::set_var(key, value) };
-    }
-    Ok(())
-}
-
-/// Capture the current shell's configuration for the daemon to use later.
-/// Returns the variables written.
-pub fn save_env_file() -> Result<Vec<String>> {
-    let mut updates = Vec::new();
-    for key in CARRIED {
-        if let Ok(value) = std::env::var(key)
-            && !value.is_empty()
-        {
-            updates.push((key.to_string(), value));
-        }
-    }
-    write_env_values(&updates)?;
-    Ok(updates.into_iter().map(|(key, _)| key).collect())
+    let name = config.unique_name("shell");
+    config.upsert(
+        &name,
+        crate::profile::Profile {
+            base_url: std::env::var("AX_BASE_URL")
+                .or_else(|_| std::env::var("OPENAI_BASE_URL"))
+                .unwrap_or_else(|_| "https://api.openai.com/v1".into()),
+            api_key: key,
+            model: std::env::var("AX_MODEL").unwrap_or_else(|_| "gpt-4.1".into()),
+        },
+    )?;
+    Ok(Some(name))
 }

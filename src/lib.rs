@@ -21,6 +21,7 @@ pub mod isolate;
 pub mod launchd;
 pub mod llm;
 pub mod paths;
+pub mod profile;
 pub mod prompt;
 pub mod relay;
 pub mod session;
