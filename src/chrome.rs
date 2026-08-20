@@ -217,6 +217,9 @@ fn open_user_browser() -> Result<String> {
 
     #[cfg(not(target_os = "macos"))]
     {
+        // `process_group` lives on the unix extension trait, not on Command.
+        use std::os::unix::process::CommandExt;
+
         let name = binary
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
