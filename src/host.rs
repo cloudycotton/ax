@@ -10,7 +10,7 @@ use crate::chrome::BrowserManager;
 use crate::event::{ConsoleStream, EventKind, EventLog};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -118,12 +118,18 @@ impl HostContext {
     }
 
     pub fn take_decision(&self) -> Option<WakeDecision> {
-        self.decision.lock().expect("decision mutex poisoned").take()
+        self.decision
+            .lock()
+            .expect("decision mutex poisoned")
+            .take()
     }
 
     /// Whether the model has already ended this wake.
     pub fn decision_pending(&self) -> bool {
-        self.decision.lock().expect("decision mutex poisoned").is_some()
+        self.decision
+            .lock()
+            .expect("decision mutex poisoned")
+            .is_some()
     }
 
     pub fn set_decision(&self, decision: WakeDecision) {
@@ -186,7 +192,7 @@ pub async fn sh(ctx: &HostContext, cmd: &str, opts: &Value) -> Result<Value> {
                 "stderr": format!("command timed out after {timeout_ms}ms"),
                 "code": -1,
                 "timed_out": true,
-            }))
+            }));
         }
     };
 

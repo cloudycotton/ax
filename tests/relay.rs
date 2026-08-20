@@ -23,8 +23,9 @@ fn temp_home(name: &str) -> std::path::PathBuf {
 async fn dial(
     port: u16,
     origin: &str,
-) -> Option<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>
-{
+) -> Option<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+> {
     let mut request = format!("ws://127.0.0.1:{port}")
         .into_client_request()
         .unwrap();
@@ -45,7 +46,9 @@ async fn rejects_a_bad_token() {
 
     let mut socket = dial(18401, "chrome-extension://abcdef").await.unwrap();
     socket
-        .send(Message::Text(json!({ "token": "wrong" }).to_string().into()))
+        .send(Message::Text(
+            json!({ "token": "wrong" }).to_string().into(),
+        ))
         .await
         .unwrap();
 
@@ -96,7 +99,11 @@ async fn a_paired_extension_round_trips_commands() {
         .unwrap();
     let reply = socket.next().await.unwrap().unwrap();
     let body: Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
-    assert_eq!(body["ok"], json!(true), "the correct token must be accepted");
+    assert_eq!(
+        body["ok"],
+        json!(true),
+        "the correct token must be accepted"
+    );
 
     // Stand in for the extension, asserting the control method matches what
     // extension/background.js switches on — a mismatch between the two sides

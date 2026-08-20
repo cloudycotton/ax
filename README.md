@@ -6,17 +6,27 @@ One binary. One tool. The model never gets `read_file` or `bash` — it gets a
 persistent JavaScript isolate with a small host API, and everything else
 (shell, files, network, browser) is reached *through* code it writes.
 
-```bash
-export AX_API_KEY=sk-...          # or OPENAI_API_KEY
-export AX_MODEL=gpt-4.1           # any OpenAI-compatible model
-export AX_BASE_URL=...            # optional: any compatible provider
+## Install
 
-ax install                        # run the daemon at every login (once)
-ax run "keep the test suite green and open a PR for each fix"
-ax ls                             # what is running
-ax attach <id>                    # replay everything, then follow it live
-ax say <id> "try the other API"   # wake it with a message
+```bash
+curl -fsSL https://raw.githubusercontent.com/cloudycotton/ax/main/install.sh | sh
 ```
+
+Then run `ax`. The first run asks for your endpoint, API key, and model, checks
+they work with one real request, and saves them to `~/.ax/env` (mode 600).
+
+```bash
+ax                    # first run: setup. after that: status
+ax run "keep the test suite green and open a PR for each fix"
+ax ls                 # what is running
+ax attach <id>        # replay everything it has done, then follow live
+ax update             # upgrade in place from the latest release
+```
+
+Configuration can also come from the environment, which wins over the saved
+file: `AX_API_KEY`, `AX_BASE_URL`, `AX_MODEL` (or `OPENAI_API_KEY` /
+`OPENAI_BASE_URL`).
+
 
 Sessions belong to a background daemon, not to your terminal: close the window
 and the goal keeps running. Attaching replays the whole history and then tails

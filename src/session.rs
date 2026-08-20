@@ -97,11 +97,13 @@ impl Session {
         let session = Self { meta, dir, log };
         // Recorded here rather than by the caller so every session's history
         // starts with its own header, however it was created.
-        session.log.append(crate::event::EventKind::SessionStarted {
-            goal: goal.to_string(),
-            cwd: cwd.to_string_lossy().to_string(),
-            model: model.to_string(),
-        })?;
+        session
+            .log
+            .append(crate::event::EventKind::SessionStarted {
+                goal: goal.to_string(),
+                cwd: cwd.to_string_lossy().to_string(),
+                model: model.to_string(),
+            })?;
         session.save_meta()?;
         Ok(session)
     }
@@ -131,13 +133,13 @@ impl Session {
             if !meta_path.exists() {
                 continue;
             }
-            if let Ok(raw) = std::fs::read_to_string(&meta_path) {
-                if let Ok(meta) = serde_json::from_str::<SessionMeta>(&raw) {
-                    out.push(meta);
-                }
+            if let Ok(raw) = std::fs::read_to_string(&meta_path)
+                && let Ok(meta) = serde_json::from_str::<SessionMeta>(&raw)
+            {
+                out.push(meta);
             }
         }
-        out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        out.sort_by_key(|meta| std::cmp::Reverse(meta.created_at));
         Ok(out)
     }
 
@@ -181,7 +183,11 @@ fn claim_session_dir(cwd: &Path) -> Result<(String, PathBuf)> {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let slug = slug.trim_matches('-').to_string();
-    let slug = if slug.is_empty() { "session".into() } else { slug };
+    let slug = if slug.is_empty() {
+        "session".into()
+    } else {
+        slug
+    };
 
     let sessions = paths::sessions_dir()?;
     paths::ensure_dir(&sessions)?;
@@ -192,17 +198,23 @@ fn claim_session_dir(cwd: &Path) -> Result<(String, PathBuf)> {
         ^ (std::process::id() as u64) << 16;
 
     for attempt in 0..256 {
-        let id = format!("{slug}-{:04x}", (seed.wrapping_add(attempt * 7919)) & 0xffff);
+        let id = format!(
+            "{slug}-{:04x}",
+            (seed.wrapping_add(attempt * 7919)) & 0xffff
+        );
         let dir = sessions.join(&id);
         match std::fs::create_dir(&dir) {
             Ok(()) => return Ok((id, dir)),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(err) => {
-                return Err(err).with_context(|| format!("could not create {}", dir.display()))
+                return Err(err).with_context(|| format!("could not create {}", dir.display()));
             }
         }
     }
-    anyhow::bail!("could not allocate a unique session id for {}", cwd.display())
+    anyhow::bail!(
+        "could not allocate a unique session id for {}",
+        cwd.display()
+    )
 }
 
 /// A session's pending wake, persisted so a restart does not lose it.

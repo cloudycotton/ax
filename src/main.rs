@@ -2,7 +2,10 @@
 
 use anyhow::{Context, Result};
 use ax::session::Session;
-use ax::{agent, chrome, config, daemon, event, host, ipc, isolate, launchd, llm, paths, relay, ui};
+use ax::{
+    agent, chrome, config, daemon, event, host, ipc, isolate, launchd, llm, paths, relay, setup,
+    ui, update,
+};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -12,8 +15,10 @@ use clap::{Parser, Subcommand};
     about = "An autonomous agent that pursues a goal by writing and running code"
 )]
 struct Cli {
+    /// Omitted on purpose: running `ax` bare walks a new user through setup
+    /// rather than printing a usage error at them.
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -71,6 +76,14 @@ enum Command {
     },
     /// Delete a session and everything it recorded.
     Rm { id: String },
+    /// Configure the endpoint, API key, and model.
+    Setup,
+    /// Update ax to the latest release.
+    Update {
+        /// Report whether an update exists without installing it.
+        #[arg(long)]
+        check: bool,
+    },
     /// Show the pairing token and how to install the browser extension.
     Pair,
     /// Run JavaScript in a throwaway isolate. For debugging the harness.
@@ -87,7 +100,15 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.command {
+    // Every command reads its credentials the same way, including when launchd
+    // starts the daemon with no shell environment at all.
+    config::load_env_file()?;
+
+    let Some(command) = cli.command else {
+        return welcome().await;
+    };
+
+    match command {
         Command::Run {
             goal,
             model,
@@ -109,10 +130,7 @@ async fn main() -> Result<()> {
         Command::Attach { id, from } => attach(&id, from).await,
         Command::Say { id, text } => say(&id, &text.join(" ")).await,
         Command::Stop { id } => stop(&id).await,
-        Command::Daemon => {
-            config::load_env_file()?;
-            daemon::Daemon::start().await
-        }
+        Command::Daemon => daemon::Daemon::start().await,
         Command::Install => install(),
         Command::Uninstall => {
             launchd::uninstall()?;
@@ -122,6 +140,8 @@ async fn main() -> Result<()> {
         Command::Ls => list(),
         Command::Log { id, follow } => show_log(&id, follow).await,
         Command::Rm { id } => remove(&id),
+        Command::Setup => setup::run(true).await,
+        Command::Update { check } => update::run(check).await,
         Command::Pair => pair(),
         Command::Js { code, timeout } => scratch_js(&code.join(" "), timeout).await,
     }
@@ -193,7 +213,52 @@ async fn browser_manager() -> Result<std::sync::Arc<chrome::BrowserManager>> {
     if let Err(err) = relay.listen().await {
         eprintln!("{}", ui::dim(&format!("browser relay unavailable: {err}")));
     }
-    Ok(std::sync::Arc::new(chrome::BrowserManager::new(home, relay)))
+    Ok(std::sync::Arc::new(chrome::BrowserManager::new(
+        home, relay,
+    )))
+}
+
+/// `ax` with no arguments. A first-time user gets setup; everyone else gets a
+/// short status and the commands worth knowing.
+async fn welcome() -> Result<()> {
+    if !config::is_configured() {
+        println!("{}", ui::bold("Welcome to ax."));
+        println!(
+            "{}",
+            ui::dim("An autonomous agent that pursues a goal by writing and running code.")
+        );
+        println!();
+        return setup::run(false).await;
+    }
+
+    let sessions = Session::list()?;
+    let live = sessions
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.status,
+                ax::session::Status::Running | ax::session::Status::Sleeping
+            )
+        })
+        .count();
+
+    println!(
+        "{} {}  {}",
+        ui::bold("ax"),
+        update::current_version(),
+        ui::dim(&format!(
+            "{} session{}, {live} active",
+            sessions.len(),
+            if sessions.len() == 1 { "" } else { "s" }
+        ))
+    );
+    println!();
+    println!("  {}   start a goal here", ui::bold("ax run \"...\""));
+    println!("  {}              what is running", ui::bold("ax ls"));
+    println!("  {}      watch one live", ui::bold("ax attach <id>"));
+    println!();
+    println!("{}", ui::dim("ax --help for everything else"));
+    Ok(())
 }
 
 async fn run(
@@ -223,12 +288,19 @@ async fn run(
             _ => anyhow::bail!("the daemon gave an unexpected answer"),
         };
 
-        println!("session {}  {}", ui::bold(&id), ui::dim(&cwd.display().to_string()));
+        println!(
+            "session {}  {}",
+            ui::bold(&id),
+            ui::dim(&cwd.display().to_string())
+        );
         if detach {
             println!("{}", ui::dim(&format!("following: ax attach {id}")));
             return Ok(());
         }
-        println!("{}", ui::dim("— attached; ctrl-c detaches, the session keeps running —"));
+        println!(
+            "{}",
+            ui::dim("— attached; ctrl-c detaches, the session keeps running —")
+        );
         return attach(&id, 0).await;
     }
 
@@ -360,12 +432,19 @@ fn install() -> Result<()> {
             ui::dim("warning: no AX_API_KEY in this shell — set one and re-run `ax install`")
         );
     } else {
-        println!("saved {} to {}", saved.join(", "), config::env_file()?.display());
+        println!(
+            "saved {} to {}",
+            saved.join(", "),
+            config::env_file()?.display()
+        );
     }
 
     let path = launchd::install()?;
     println!("daemon installed: {}", path.display());
-    println!("{}", ui::dim("it starts now and at every login; `ax uninstall` removes it"));
+    println!(
+        "{}",
+        ui::dim("it starts now and at every login; `ax uninstall` removes it")
+    );
     Ok(())
 }
 

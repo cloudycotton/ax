@@ -122,23 +122,23 @@ impl Agent {
             self.resume().await
         };
         loop {
-            if let Some(max) = self.limits.max_wakes {
-                if self.session.meta.wakes >= max {
-                    self.session.log.append(EventKind::Error {
-                        message: format!("stopping: reached the {max}-wake limit"),
-                    })?;
-                    self.session.set_status(Status::Failed)?;
-                    return Ok(());
-                }
+            if let Some(max) = self.limits.max_wakes
+                && self.session.meta.wakes >= max
+            {
+                self.session.log.append(EventKind::Error {
+                    message: format!("stopping: reached the {max}-wake limit"),
+                })?;
+                self.session.set_status(Status::Failed)?;
+                return Ok(());
             }
-            if let Some(max) = self.limits.max_tokens {
-                if self.tokens_used >= max {
-                    self.session.log.append(EventKind::Error {
-                        message: format!("stopping: reached the {max}-token budget"),
-                    })?;
-                    self.session.set_status(Status::Failed)?;
-                    return Ok(());
-                }
+            if let Some(max) = self.limits.max_tokens
+                && self.tokens_used >= max
+            {
+                self.session.log.append(EventKind::Error {
+                    message: format!("stopping: reached the {max}-token budget"),
+                })?;
+                self.session.set_status(Status::Failed)?;
+                return Ok(());
             }
 
             let decision = self.wake(reason).await?;
@@ -216,9 +216,10 @@ impl Agent {
         self.session.meta.wakes += 1;
         let wake = self.session.meta.wakes;
         self.session.set_status(Status::Running)?;
-        self.session
-            .log
-            .append(EventKind::WakeStarted { wake, reason: reason.clone() })?;
+        self.session.log.append(EventKind::WakeStarted {
+            wake,
+            reason: reason.clone(),
+        })?;
 
         let manifest = self.isolate.manifest().await.unwrap_or_default();
         let pending = std::mem::take(&mut self.pending);
@@ -268,7 +269,8 @@ on_exit, or done now — via run_js, as a normal function call."
             if turn + 1 == MAX_TURNS_PER_WAKE {
                 messages.push(Message::user(
                     "This wake has used its turn budget. Update the ledger and schedule your next \
-wake now.".to_string(),
+wake now."
+                        .to_string(),
                 ));
             }
         }
@@ -383,25 +385,25 @@ wake now.".to_string(),
 
     async fn sleep_until(&mut self, at: DateTime<Utc>, note: String) -> WakeReason {
         let at = self.not_before(at);
+        let remaining = (at - Utc::now()).to_std().unwrap_or(Duration::ZERO);
 
-        loop {
-            let remaining = (at - Utc::now()).to_std().unwrap_or(Duration::ZERO);
-            tokio::select! {
-                _ = tokio::time::sleep(remaining) => {
-                    return WakeReason::Timer { note };
-                }
-                Some((name, code)) = self.exits.recv() => {
-                    // A process dying is usually more interesting than the
-                    // timer that was pending, so wake now and say why.
-                    return WakeReason::ProcessExit { name, code };
-                }
-                Some(text) = self.inbox.recv() => {
-                    // A person always outranks a timer.
-                    let _ = self.session.log.append(EventKind::UserMessage {
-                        text: text.clone(),
-                    });
-                    return WakeReason::User { text };
-                }
+        // Whichever happens first ends the sleep, and the reason it woke is
+        // what the next wake gets told.
+        tokio::select! {
+            _ = tokio::time::sleep(remaining) => {
+                WakeReason::Timer { note }
+            }
+            Some((name, code)) = self.exits.recv() => {
+                // A process dying is usually more interesting than the timer
+                // that was pending, so wake now and say why.
+                WakeReason::ProcessExit { name, code }
+            }
+            Some(text) = self.inbox.recv() => {
+                // A person always outranks a timer.
+                let _ = self.session.log.append(EventKind::UserMessage {
+                    text: text.clone(),
+                });
+                WakeReason::User { text }
             }
         }
     }

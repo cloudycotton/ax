@@ -36,13 +36,24 @@ pub enum Request {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "reply", rename_all = "snake_case")]
 pub enum Response {
-    Pong { version: String, sessions: usize },
-    Created { id: String },
-    Sessions { sessions: Vec<SessionMeta> },
+    Pong {
+        version: String,
+        sessions: usize,
+    },
+    Created {
+        id: String,
+    },
+    Sessions {
+        sessions: Vec<SessionMeta>,
+    },
     /// One event in an attach stream.
-    Event { event: Box<LoggedEvent> },
+    Event {
+        event: Box<LoggedEvent>,
+    },
     Ok,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 impl Response {

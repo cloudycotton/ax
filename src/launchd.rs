@@ -112,8 +112,17 @@ mod tests {
 
         // Every opened tag closes: a malformed plist is silently ignored by
         // launchd, which is a maddening way to fail.
-        assert_eq!(rendered.matches("<dict>").count(), rendered.matches("</dict>").count());
-        assert_eq!(rendered.matches("<array>").count(), rendered.matches("</array>").count());
-        assert_eq!(rendered.matches("<string>").count(), rendered.matches("</string>").count());
+        assert_eq!(
+            rendered.matches("<dict>").count(),
+            rendered.matches("</dict>").count()
+        );
+        assert_eq!(
+            rendered.matches("<array>").count(),
+            rendered.matches("</array>").count()
+        );
+        assert_eq!(
+            rendered.matches("<string>").count(),
+            rendered.matches("</string>").count()
+        );
     }
 }

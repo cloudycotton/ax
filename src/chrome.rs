@@ -53,10 +53,10 @@ impl BrowserManager {
     /// Return a live CDP connection, establishing one if needed.
     pub async fn ensure(&self) -> Result<Arc<CdpClient>> {
         let mut slot = self.client.lock().await;
-        if let Some(existing) = slot.as_ref() {
-            if existing.is_open() {
-                return Ok(existing.clone());
-            }
+        if let Some(existing) = slot.as_ref()
+            && existing.is_open()
+        {
+            return Ok(existing.clone());
         }
 
         // The extension, if the user has installed and paired it, gives us
@@ -142,10 +142,10 @@ AX_CHROME to the executable path."
         // Chrome writes the port only once it is actually listening.
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         loop {
-            if let Some(url) = read_endpoint(&profile) {
-                if let Ok(client) = CdpClient::connect(&url, "managed").await {
-                    return Ok(client);
-                }
+            if let Some(url) = read_endpoint(&profile)
+                && let Ok(client) = CdpClient::connect(&url, "managed").await
+            {
+                return Ok(client);
             }
             if std::time::Instant::now() > deadline {
                 bail!("the browser started but never opened a debugging port");

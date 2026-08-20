@@ -8,7 +8,7 @@
 //! function-calling still work via the fenced-code fallback in
 //! [`Completion::from_parts`].
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -191,13 +191,13 @@ fn extract_fenced_js(text: &str) -> Option<String> {
     let mut rest = text;
     while let Some(open) = rest.find("```") {
         let after = &rest[open + 3..];
-        let (lang, body) = match after.find('\n') {
-            Some(nl) => (after[..nl].trim(), &after[nl + 1..]),
-            None => return None,
+        let (lang, body) = {
+            let nl = after.find('\n')?;
+            (after[..nl].trim(), &after[nl + 1..])
         };
         let close = body.find("```")?;
         let code = &body[..close];
-        if matches!(lang, "js" | "javascript" | "" ) && !code.trim().is_empty() {
+        if matches!(lang, "js" | "javascript" | "") && !code.trim().is_empty() {
             return Some(code.to_string());
         }
         rest = &body[close + 3..];
@@ -232,7 +232,7 @@ impl LlmClient {
             "function": {
                 "name": TOOL_NAME,
                 "description": "Run JavaScript in your persistent isolate and return the result. \
-Top-level await is supported; `return` a value to see it. Globals you define persist across calls.",
+        Top-level await is supported; `return` a value to see it. Globals you define persist across calls.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -245,6 +245,44 @@ Top-level await is supported; `return` a value to see it. Globals you define per
                 }
             }
         }])
+    }
+
+    /// One cheap, non-streaming request to prove the endpoint, key, and model
+    /// all work. Deliberately does not retry: `ax setup` wants a wrong key to
+    /// fail immediately, not after a minute of backoff.
+    pub async fn probe(&self) -> Result<()> {
+        let body = json!({
+            "model": self.config.model,
+            "messages": [{ "role": "user", "content": "Reply with the single word: ok" }],
+            "max_tokens": 8,
+        });
+        let response = self
+            .http
+            .post(format!("{}/chat/completions", self.config.base_url))
+            .bearer_auth(&self.config.api_key)
+            .timeout(Duration::from_secs(30))
+            .json(&body)
+            .send()
+            .await
+            .context("could not reach the endpoint")?;
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let detail = response.text().await.unwrap_or_default();
+        // Surface the provider's own message: it is nearly always the clearest
+        // explanation of what is wrong (bad key, unknown model, no credit).
+        let message = serde_json::from_str::<serde_json::Value>(&detail)
+            .ok()
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| detail.trim().chars().take(300).collect());
+        bail!("{status}: {message}")
     }
 
     /// Stream one completion, invoking `on_text` with prose deltas as they
@@ -404,11 +442,11 @@ fn apply_chunk(
         return;
     };
 
-    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
-        if !content.is_empty() {
-            text.push_str(content);
-            on_text(content);
-        }
+    if let Some(content) = delta.get("content").and_then(|c| c.as_str())
+        && !content.is_empty()
+    {
+        text.push_str(content);
+        on_text(content);
     }
 
     let Some(calls) = delta.get("tool_calls").and_then(|t| t.as_array()) else {
@@ -420,16 +458,16 @@ fn apply_chunk(
             partials.resize(index + 1, PartialToolCall::default());
         }
         let slot = &mut partials[index];
-        if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
-            if !id.is_empty() {
-                slot.id = id.to_string();
-            }
+        if let Some(id) = call.get("id").and_then(|v| v.as_str())
+            && !id.is_empty()
+        {
+            slot.id = id.to_string();
         }
         if let Some(function) = call.get("function") {
-            if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
-                if !name.is_empty() {
-                    slot.name = name.to_string();
-                }
+            if let Some(name) = function.get("name").and_then(|v| v.as_str())
+                && !name.is_empty()
+            {
+                slot.name = name.to_string();
             }
             if let Some(args) = function.get("arguments").and_then(|v| v.as_str()) {
                 slot.arguments.push_str(args);

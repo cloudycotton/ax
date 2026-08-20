@@ -7,9 +7,9 @@ mod common;
 
 use ax::agent::{Agent, Limits};
 use ax::chrome::BrowserManager;
-use ax::relay::Relay;
 use ax::event::{self, EventKind};
 use ax::llm::{LlmClient, LlmConfig};
+use ax::relay::Relay;
 use ax::session::{Session, Status};
 use common::{Turn, scripted_server};
 use std::time::Duration;
@@ -86,7 +86,10 @@ async fn runs_a_wake_and_finishes_the_goal() {
     // The session must be marked done on disk...
     let reloaded = Session::load(&id).unwrap();
     assert_eq!(reloaded.meta.status, Status::Done);
-    assert_eq!(reloaded.meta.wakes, 1, "should have needed exactly one wake");
+    assert_eq!(
+        reloaded.meta.wakes, 1,
+        "should have needed exactly one wake"
+    );
 
     // ...and the event log must contain the full story, in order.
     let events = event::read_all(&log_path).unwrap();
@@ -103,8 +106,14 @@ async fn runs_a_wake_and_finishes_the_goal() {
         })
         .collect();
     assert!(kinds.contains(&"wake"), "no wake recorded: {kinds:?}");
-    assert!(kinds.contains(&"console"), "console output was not captured");
-    assert!(kinds.contains(&"done"), "goal was never marked done: {kinds:?}");
+    assert!(
+        kinds.contains(&"console"),
+        "console output was not captured"
+    );
+    assert!(
+        kinds.contains(&"done"),
+        "goal was never marked done: {kinds:?}"
+    );
 
     // The console line the code printed must be readable after the fact — this
     // is what `ax attach` replays.
@@ -161,9 +170,9 @@ async fn state_persists_across_wakes_and_fenced_code_runs() {
     let events = event::read_all(&log_path).unwrap();
     // If the isolate had been rebuilt between wakes, the second block would
     // have thrown instead of finishing.
-    let finished = events.iter().any(|e| {
-        matches!(&e.kind, EventKind::Done { summary } if summary.contains("tally reached 2"))
-    });
+    let finished = events.iter().any(
+        |e| matches!(&e.kind, EventKind::Done { summary } if summary.contains("tally reached 2")),
+    );
     assert!(finished, "state did not survive the wake boundary");
 }
 

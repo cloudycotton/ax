@@ -13,7 +13,7 @@
 
 use crate::event::ConsoleStream;
 use crate::host::{self, HostContext, WakeDecision};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use rquickjs::prelude::{Async, Func};
 use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, CaughtError, Function, Value};
@@ -98,7 +98,9 @@ impl Isolate {
                 reply,
             })
             .map_err(|_| anyhow!("isolate is gone"))?;
-        response.await.map_err(|_| anyhow!("isolate dropped the job"))
+        response
+            .await
+            .map_err(|_| anyhow!("isolate dropped the job"))
     }
 
     /// Summarize what is still alive in the isolate, for the next wake.
@@ -107,7 +109,9 @@ impl Isolate {
         self.tx
             .send(Job::Manifest { reply })
             .map_err(|_| anyhow!("isolate is gone"))?;
-        response.await.map_err(|_| anyhow!("isolate dropped the job"))
+        response
+            .await
+            .map_err(|_| anyhow!("isolate dropped the job"))
     }
 }
 
@@ -139,9 +143,9 @@ async fn isolate_main(
     let deadline: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
     {
         let deadline = deadline.clone();
-        qjs.set_interrupt_handler(Some(Box::new(move || {
-            matches!(deadline.get(), Some(at) if Instant::now() > at)
-        })))
+        qjs.set_interrupt_handler(Some(Box::new(
+            move || matches!(deadline.get(), Some(at) if Instant::now() > at),
+        )))
         .await;
     }
 
@@ -468,7 +472,9 @@ fn install_globals(ctx: &rquickjs::Ctx<'_>, host: &Arc<HostContext>) -> Result<(
                     .lock()
                     .expect("notify mutex poisoned")
                     .push((level.clone(), message.clone()));
-                let _ = host.log.append(crate::event::EventKind::Notify { level, message });
+                let _ = host
+                    .log
+                    .append(crate::event::EventKind::Notify { level, message });
             }),
         )?;
     }
@@ -513,7 +519,9 @@ fn install_globals(ctx: &rquickjs::Ctx<'_>, host: &Arc<HostContext>) -> Result<(
                             )
                             .await;
                         ok_json(match event {
-                            Some(event) => json!({ "method": event.method, "params": event.params }),
+                            Some(event) => {
+                                json!({ "method": event.method, "params": event.params })
+                            }
                             None => JsonValue::Null,
                         })
                     }
@@ -541,7 +549,10 @@ fn install_globals(ctx: &rquickjs::Ctx<'_>, host: &Arc<HostContext>) -> Result<(
     globals.set("GOAL_DIR", host.goal_dir.to_string_lossy().to_string())?;
     globals.set(
         "LEDGER",
-        host.goal_dir.join("ledger.md").to_string_lossy().to_string(),
+        host.goal_dir
+            .join("ledger.md")
+            .to_string_lossy()
+            .to_string(),
     )?;
     globals.set("CWD", host.cwd.to_string_lossy().to_string())?;
 

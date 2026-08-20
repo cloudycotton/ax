@@ -79,11 +79,11 @@ async fn supervises_a_session_and_replays_it_on_attach() {
     // finish on its own.
     let mut finished = false;
     for _ in 0..300 {
-        if let Ok(session) = Session::load(&id) {
-            if session.meta.status == Status::Done {
-                finished = true;
-                break;
-            }
+        if let Ok(session) = Session::load(&id)
+            && session.meta.status == Status::Done
+        {
+            finished = true;
+            break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

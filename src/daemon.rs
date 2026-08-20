@@ -209,7 +209,9 @@ impl Daemon {
                     let response = match self.sessions.lock().await.get(&id) {
                         Some(supervised) => match supervised.inbox.send(text) {
                             Ok(()) => Response::Ok,
-                            Err(_) => Response::error("that session is no longer accepting messages"),
+                            Err(_) => {
+                                Response::error("that session is no longer accepting messages")
+                            }
                         },
                         None => Response::error(format!("session {id} is not running")),
                     };
@@ -289,7 +291,11 @@ impl Daemon {
         let dir = paths::session_dir(id)?;
         let log_path = dir.join("events.jsonl");
         if !log_path.exists() {
-            send(&mut writer, &Response::error(format!("no such session {id}"))).await?;
+            send(
+                &mut writer,
+                &Response::error(format!("no such session {id}")),
+            )
+            .await?;
             return Ok(());
         }
 

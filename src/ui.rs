@@ -18,6 +18,16 @@ fn colored(code: &str, s: &str) -> String {
     format!("\x1b[{code}m{s}\x1b[0m")
 }
 
+/// A green affirmative, for things that worked.
+pub fn ok(s: &str) -> String {
+    colored("32", s)
+}
+
+/// A red negative, for things that did not.
+pub fn bad(s: &str) -> String {
+    colored("31", s)
+}
+
 pub fn status_label(status: Status) -> String {
     match status {
         Status::Running => colored("32", "running"),
@@ -55,7 +65,10 @@ pub fn render(logged: &LoggedEvent) {
             );
         }
         EventKind::WakeEnded { wake, outcome } => {
-            println!("{stamp} {}", dim(&format!("── wake #{wake} ended: {outcome}")));
+            println!(
+                "{stamp} {}",
+                dim(&format!("── wake #{wake} ended: {outcome}"))
+            );
         }
         EventKind::ModelText { text } => {
             for line in text.lines() {
@@ -87,7 +100,11 @@ pub fn render(logged: &LoggedEvent) {
             } else {
                 colored("31", "✗")
             };
-            let suffix = if *truncated { dim(" (truncated)") } else { String::new() };
+            let suffix = if *truncated {
+                dim(" (truncated)")
+            } else {
+                String::new()
+            };
             println!(
                 "{stamp} {marker} {}{suffix} {}",
                 truncate_line(value, 100),
@@ -103,7 +120,10 @@ pub fn render(logged: &LoggedEvent) {
             println!("{stamp} {} {when} — {note}", colored("36", "sleep until"));
         }
         EventKind::Notify { level, message } => {
-            println!("{stamp} {} {message}", colored("1;35", &format!("[{level}]")));
+            println!(
+                "{stamp} {} {message}",
+                colored("1;35", &format!("[{level}]"))
+            );
         }
         EventKind::Done { summary } => {
             println!("{stamp} {} {summary}", colored("1;32", "done"));
@@ -123,7 +143,9 @@ pub fn render(logged: &LoggedEvent) {
         } => {
             println!(
                 "{stamp} {}",
-                dim(&format!("tokens: {prompt_tokens} in / {completion_tokens} out"))
+                dim(&format!(
+                    "tokens: {prompt_tokens} in / {completion_tokens} out"
+                ))
             );
         }
         EventKind::Error { message } => {

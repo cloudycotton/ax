@@ -35,10 +35,13 @@ pub struct CdpEvent {
     pub session_id: Option<String>,
 }
 
+/// Commands awaiting a reply, keyed by the id we sent them with.
+type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
+
 /// A live CDP connection.
 pub struct CdpClient {
     next_id: AtomicU64,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: Pending,
     outgoing: mpsc::UnboundedSender<String>,
     events: broadcast::Sender<CdpEvent>,
     /// Which transport this connection came from, for reporting.
@@ -89,8 +92,7 @@ impl CdpClient {
         kind: &'static str,
     ) -> Arc<Self> {
         let (events, _) = broadcast::channel(2048);
-        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
 
         let client = Arc::new(Self {
             next_id: AtomicU64::new(1),

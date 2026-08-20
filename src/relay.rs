@@ -90,22 +90,23 @@ impl Relay {
         Ok(())
     }
 
+    // The large `Err` clippy flags below is tungstenite's `ErrorResponse`, whose
+    // shape the handshake callback signature dictates.
+    #[allow(clippy::result_large_err)]
     async fn serve(self: Arc<Self>, socket: tokio::net::TcpStream) -> Result<()> {
         // Only a Chrome extension page may open this socket; a web page that
         // happened to learn the port must not be able to.
         let mut origin_ok = false;
-        let stream = tokio_tungstenite::accept_hdr_async(
-            socket,
-            |request: &Request, response: Response| {
+        let stream =
+            tokio_tungstenite::accept_hdr_async(socket, |request: &Request, response: Response| {
                 if let Some(origin) = request.headers().get("origin") {
                     let origin = origin.to_str().unwrap_or_default();
                     origin_ok = origin.starts_with("chrome-extension://");
                 }
                 Ok(response)
-            },
-        )
-        .await
-        .context("websocket handshake failed")?;
+            })
+            .await
+            .context("websocket handshake failed")?;
 
         if !origin_ok {
             bail!("connection did not come from a browser extension");
@@ -181,8 +182,7 @@ fn load_or_create_token(agent_home: &Path) -> Result<String> {
 
     let token = random_token();
     std::fs::create_dir_all(agent_home)?;
-    std::fs::write(&path, &token)
-        .with_context(|| format!("could not write {}", path.display()))?;
+    std::fs::write(&path, &token).with_context(|| format!("could not write {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

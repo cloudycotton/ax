@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::broadcast;
 
 /// Why the agent woke up. Injected into the model's context so it always knows
@@ -215,8 +215,8 @@ impl EventLog {
 /// failing the read: a truncated final line from a hard kill should not make
 /// the whole session unviewable.
 pub fn read_all(path: &Path) -> Result<Vec<LoggedEvent>> {
-    let file = File::open(path)
-        .with_context(|| format!("failed to open event log {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("failed to open event log {}", path.display()))?;
     let mut events = Vec::new();
     for line in BufReader::new(file).lines() {
         let line = line?;
