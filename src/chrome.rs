@@ -6,7 +6,7 @@
 //!    is the one that matters: it has their sessions, their cookies, their
 //!    logins. See [`crate::relay`].
 //! 2. **A browser we launch ourselves**, on a dedicated profile under
-//!    `~/.agent/chrome`, with a debugging port. Always available, and anything
+//!    `~/.ax/chrome`, with a debugging port. Always available, and anything
 //!    the agent signs into there persists — but it starts out logged into
 //!    nothing.
 //!
@@ -111,7 +111,7 @@ impl BrowserManager {
         let binary = find_browser().ok_or_else(|| {
             anyhow!(
                 "no Chromium-based browser found. Install Google Chrome, or set \
-AGENT_CHROME to the executable path."
+AX_CHROME to the executable path."
             )
         })?;
 
@@ -131,7 +131,7 @@ AGENT_CHROME to the executable path."
             // Outlive this wake: the browser should still be there next time.
             .process_group(0);
 
-        if std::env::var("AGENT_CHROME_HEADLESS").is_ok() {
+        if std::env::var("AX_CHROME_HEADLESS").is_ok() {
             command.arg("--headless=new");
         }
 
@@ -168,7 +168,7 @@ fn read_endpoint(profile: &Path) -> Option<String> {
 }
 
 fn find_browser() -> Option<PathBuf> {
-    if let Ok(custom) = std::env::var("AGENT_CHROME") {
+    if let Ok(custom) = std::env::var("AX_CHROME") {
         let path = PathBuf::from(custom);
         if path.exists() {
             return Some(path);

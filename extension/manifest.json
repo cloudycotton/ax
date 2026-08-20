@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Agent Browser Bridge",
+  "name": "ax Browser Bridge",
   "version": "0.1.0",
   "description": "Lets a local agent drive this browser through the DevTools protocol.",
   "permissions": ["debugger", "tabs", "storage", "alarms"],
@@ -10,7 +10,7 @@
   },
   "options_page": "options.html",
   "action": {
-    "default_title": "Agent Browser Bridge",
+    "default_title": "ax Browser Bridge",
     "default_popup": "options.html"
   }
 }

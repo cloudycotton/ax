@@ -1,13 +1,13 @@
-//! `agent` — an autonomous, goal-oriented agent that acts by writing code.
+//! `ax` — an autonomous, goal-oriented agent that acts by writing code.
 
 use anyhow::Result;
-use as_agent::session::Session;
-use as_agent::{agent, chrome, event, host, isolate, llm, paths, relay, ui};
+use ax::session::Session;
+use ax::{agent, chrome, event, host, isolate, llm, paths, relay, ui};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
-    name = "agent",
+    name = "ax",
     version,
     about = "An autonomous agent that pursues a goal by writing and running code"
 )]
@@ -23,7 +23,7 @@ enum Command {
         /// The goal, in plain language.
         #[arg(required = true, num_args = 1..)]
         goal: Vec<String>,
-        /// Model id (defaults to $AGENT_MODEL).
+        /// Model id (defaults to $AX_MODEL).
         #[arg(long)]
         model: Option<String>,
         /// Stop after this many wakes.
@@ -184,7 +184,7 @@ async fn run(
 fn list() -> Result<()> {
     let sessions = Session::list()?;
     if sessions.is_empty() {
-        println!("no sessions yet — start one with `agent run \"<goal>\"`");
+        println!("no sessions yet — start one with `ax run \"<goal>\"`");
         return Ok(());
     }
     for meta in sessions {

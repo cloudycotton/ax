@@ -30,20 +30,20 @@ pub struct LlmConfig {
 }
 
 impl LlmConfig {
-    /// Read configuration from the environment. `AGENT_BASE_URL` /
-    /// `AGENT_API_KEY` / `AGENT_MODEL` win, falling back to the usual
+    /// Read configuration from the environment. `AX_BASE_URL` /
+    /// `AX_API_KEY` / `AX_MODEL` win, falling back to the usual
     /// `OPENAI_*` names so an existing shell just works.
     pub fn from_env(model_override: Option<String>) -> Result<Self> {
-        let base_url = std::env::var("AGENT_BASE_URL")
+        let base_url = std::env::var("AX_BASE_URL")
             .or_else(|_| std::env::var("OPENAI_BASE_URL"))
             .unwrap_or_else(|_| "https://api.openai.com/v1".to_string())
             .trim_end_matches('/')
             .to_string();
-        let api_key = std::env::var("AGENT_API_KEY")
+        let api_key = std::env::var("AX_API_KEY")
             .or_else(|_| std::env::var("OPENAI_API_KEY"))
-            .context("set AGENT_API_KEY (or OPENAI_API_KEY) to your provider's key")?;
+            .context("set AX_API_KEY (or OPENAI_API_KEY) to your provider's key")?;
         let model = model_override
-            .or_else(|| std::env::var("AGENT_MODEL").ok())
+            .or_else(|| std::env::var("AX_MODEL").ok())
             .unwrap_or_else(|| "gpt-4.1".to_string());
         Ok(Self {
             base_url,

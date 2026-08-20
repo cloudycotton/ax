@@ -1,18 +1,18 @@
 //! Filesystem layout for the agent's durable state.
 //!
 //! Everything the agent knows how to survive a restart with lives under
-//! `~/.agent`. The isolate is scratch; this directory is truth.
+//! `~/.ax`. The isolate is scratch; this directory is truth.
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-/// Root of all agent state: `~/.agent` (override with `AGENT_HOME`).
+/// Root of all agent state: `~/.ax` (override with `AX_HOME`).
 pub fn agent_home() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("AGENT_HOME") {
+    if let Ok(custom) = std::env::var("AX_HOME") {
         return Ok(PathBuf::from(custom));
     }
     let home = std::env::var("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".agent"))
+    Ok(PathBuf::from(home).join(".ax"))
 }
 
 /// Where per-goal session directories live.

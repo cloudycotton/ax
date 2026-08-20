@@ -234,8 +234,8 @@ wake now.".to_string(),
             .llm
             .complete(messages, |delta| {
                 // Live prose for anyone watching the terminal. The complete text
-                // is written to the event log below, which is what `agent log`
-                // and `agent attach` replay.
+                // is written to the event log below, which is what `ax log`
+                // and `ax attach` replay.
                 print!("{delta}");
                 let _ = std::io::stdout().flush();
                 streamed = true;

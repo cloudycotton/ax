@@ -5,7 +5,7 @@
 //! *separate* from the message window sent to the model — the model's context
 //! gets compacted as a session runs for days, but this log never loses
 //! anything. Attaching to a session replays this file and then tails it, which
-//! is what makes `agent attach` behave like reconnecting to a tmux pane.
+//! is what makes `ax attach` behave like reconnecting to a tmux pane.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};

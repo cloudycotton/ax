@@ -1,16 +1,16 @@
 [package]
-name = "as-agent"
+name = "ax"
 version = "0.1.0"
 edition = "2024"
 
-# The binary is `agent`, not `as`: `as` is both a Rust keyword and the system
-# assembler at /usr/bin/as, which shadowing would break C and Rust builds.
+# Not `as`: that is both a Rust keyword and the system assembler at /usr/bin/as,
+# which shadowing on PATH would break C and Rust builds.
 [lib]
-name = "as_agent"
+name = "ax"
 path = "src/lib.rs"
 
 [[bin]]
-name = "agent"
+name = "ax"
 path = "src/main.rs"
 
 [dependencies]

@@ -3,12 +3,12 @@
 //! whole path works: SSE parsing, tool-call assembly, execution in the isolate,
 //! the scheduling decision, and the durable event log.
 
-use as_agent::agent::{Agent, Limits};
-use as_agent::chrome::BrowserManager;
-use as_agent::relay::Relay;
-use as_agent::event::{self, EventKind};
-use as_agent::llm::{LlmClient, LlmConfig};
-use as_agent::session::{Session, Status};
+use ax::agent::{Agent, Limits};
+use ax::chrome::BrowserManager;
+use ax::relay::Relay;
+use ax::event::{self, EventKind};
+use ax::llm::{LlmClient, LlmConfig};
+use ax::session::{Session, Status};
 use serde_json::json;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -87,7 +87,7 @@ async fn scripted_server(turns: Vec<Turn>) -> String {
 /// A browser manager the tests never actually connect through. Each gets its
 /// own relay port so the suite can run in parallel.
 fn browser(port: u16) -> std::sync::Arc<BrowserManager> {
-    let home = std::env::temp_dir().join("as-agent-tests");
+    let home = std::env::temp_dir().join("ax-tests");
     let relay = Relay::new(&home, port).unwrap();
     std::sync::Arc::new(BrowserManager::new(home, relay))
 }
@@ -103,7 +103,7 @@ fn config_for(base_url: String) -> LlmConfig {
     }
 }
 
-/// Point AGENT_HOME at a scratch directory so tests never touch ~/.agent.
+/// Point AX_HOME at a scratch directory so tests never touch ~/.ax.
 ///
 /// Set exactly once for the whole test binary: `set_var` is process-global, so
 /// tests running concurrently must not each point it somewhere different.
@@ -111,12 +111,12 @@ fn config_for(base_url: String) -> LlmConfig {
 fn test_home() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        let dir = std::env::temp_dir().join("as-agent-tests");
+        let dir = std::env::temp_dir().join("ax-tests");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // Safety: this runs before any agent code reads the variable, and the
         // Once guarantees no concurrent writer.
-        unsafe { std::env::set_var("AGENT_HOME", &dir) };
+        unsafe { std::env::set_var("AX_HOME", &dir) };
     });
 }
 
@@ -177,7 +177,7 @@ async fn runs_a_wake_and_finishes_the_goal() {
     assert!(kinds.contains(&"done"), "goal was never marked done: {kinds:?}");
 
     // The console line the code printed must be readable after the fact — this
-    // is what `agent attach` replays.
+    // is what `ax attach` replays.
     let printed = events.iter().any(|e| {
         matches!(&e.kind, EventKind::Console { text, .. } if text.contains("collected 1 finding"))
     });

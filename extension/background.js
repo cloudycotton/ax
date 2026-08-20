@@ -109,7 +109,7 @@ function setBadge(text) {
 
 async function handleCommand({ id, method, params, sessionId }) {
   try {
-    const result = method.startsWith("agent.")
+    const result = method.startsWith("ax.")
       ? await control(method, params || {})
       : await forward(method, params || {}, sessionId);
     send({ id, result: result ?? {} });
@@ -121,7 +121,7 @@ async function handleCommand({ id, method, params, sessionId }) {
 /// Operations that have no CDP equivalent at the browser level.
 async function control(method, params) {
   switch (method) {
-    case "agent.tabs": {
+    case "ax.tabs": {
       const tabs = await chrome.tabs.query({});
       return {
         tabs: tabs
@@ -136,13 +136,13 @@ async function control(method, params) {
       };
     }
 
-    case "agent.attach": {
+    case "ax.attach": {
       const tabId = Number(params.tabId);
       await attach(tabId);
       return { sessionId: String(tabId) };
     }
 
-    case "agent.newTab": {
+    case "ax.newTab": {
       // Opened in the background so the agent does not steal focus from the
       // person using the browser.
       const tab = await chrome.tabs.create({ url: params.url || "about:blank", active: false });
@@ -150,13 +150,13 @@ async function control(method, params) {
       return { tabId: String(tab.id) };
     }
 
-    case "agent.activate": {
+    case "ax.activate": {
       const tabId = Number(params.tabId);
       await chrome.tabs.update(tabId, { active: true });
       return {};
     }
 
-    case "agent.detach": {
+    case "ax.detach": {
       const tabId = Number(params.tabId);
       if (attached.has(tabId)) {
         await chrome.debugger.detach({ tabId });

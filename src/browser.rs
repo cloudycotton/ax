@@ -19,7 +19,7 @@ pub async fn targets(client: &CdpClient) -> Result<Value> {
     match client.kind {
         "extension" => {
             let result = client
-                .send("agent.tabs", json!({}), None, DEFAULT_TIMEOUT)
+                .send("ax.tabs", json!({}), None, DEFAULT_TIMEOUT)
                 .await?;
             Ok(result.get("tabs").cloned().unwrap_or(json!([])))
         }
@@ -57,7 +57,7 @@ pub async fn attach(client: &CdpClient, target_id: &str) -> Result<String> {
             // id as the session id.
             let result = client
                 .send(
-                    "agent.attach",
+                    "ax.attach",
                     json!({ "tabId": target_id }),
                     None,
                     DEFAULT_TIMEOUT,
@@ -93,7 +93,7 @@ pub async fn new_tab(client: &CdpClient, url: &str) -> Result<Value> {
     let target_id = match client.kind {
         "extension" => {
             let result = client
-                .send("agent.newTab", json!({ "url": url }), None, DEFAULT_TIMEOUT)
+                .send("ax.newTab", json!({ "url": url }), None, DEFAULT_TIMEOUT)
                 .await?;
             result
                 .get("tabId")
@@ -133,7 +133,7 @@ pub async fn activate(client: &CdpClient, target_id: &str) -> Result<Value> {
         "extension" => {
             client
                 .send(
-                    "agent.activate",
+                    "ax.activate",
                     json!({ "tabId": target_id }),
                     None,
                     DEFAULT_TIMEOUT,

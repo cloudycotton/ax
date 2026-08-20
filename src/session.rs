@@ -2,7 +2,7 @@
 //!
 //! Layout on disk:
 //! ```text
-//! ~/.agent/sessions/<id>/
+//! ~/.ax/sessions/<id>/
 //!   meta.json      session identity + status
 //!   events.jsonl   complete history (see event.rs)
 //!   ledger.md      the model's own record of progress; injected every wake

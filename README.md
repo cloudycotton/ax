@@ -1,4 +1,4 @@
-# agent
+# ax
 
 An autonomous, goal-oriented agent that acts by writing and running code.
 
@@ -7,13 +7,13 @@ persistent JavaScript isolate with a small host API, and everything else
 (shell, files, network, browser) is reached *through* code it writes.
 
 ```bash
-export AGENT_API_KEY=sk-...          # or OPENAI_API_KEY
-export AGENT_MODEL=gpt-4.1           # any OpenAI-compatible model
-export AGENT_BASE_URL=...            # optional: any compatible provider
+export AX_API_KEY=sk-...          # or OPENAI_API_KEY
+export AX_MODEL=gpt-4.1           # any OpenAI-compatible model
+export AX_BASE_URL=...            # optional: any compatible provider
 
-agent run "keep the test suite green and open a PR for each fix"
-agent ls                             # what is running
-agent log <id> --follow              # replay history, then tail it live
+ax run "keep the test suite green and open a PR for each fix"
+ax ls                             # what is running
+ax log <id> --follow              # replay history, then tail it live
 ```
 
 ## Why this shape
@@ -55,7 +55,7 @@ running for days and read the whole story.
 | `src/event.rs` | The durable append-only session log |
 | `src/prompt.rs` | System prompt and per-wake message |
 
-Session state lives in `~/.agent/sessions/<id>/`: `events.jsonl`, `ledger.md`,
+Session state lives in `~/.ax/sessions/<id>/`: `events.jsonl`, `ledger.md`,
 `meta.json`, `memory/`, `artifacts/`.
 
 ## Design notes
@@ -84,8 +84,8 @@ The agent drives a real Chrome. Two transports, one interface:
 - **The user's own browser**, through the extension in `extension/`. This is the
   one that matters — it has their sessions and logins. Chrome 136+ refuses
   `--remote-debugging-port` on the default profile, so `chrome.debugger` inside
-  an extension is the only sanctioned way in. Run `agent pair` for setup.
-- **A browser the agent launches**, on its own profile under `~/.agent/chrome`.
+  an extension is the only sanctioned way in. Run `ax pair` for setup.
+- **A browser the agent launches**, on its own profile under `~/.ax/chrome`.
   No install required, but signed into nothing until someone signs in.
 
 Reading a page is designed for models without vision:
@@ -117,7 +117,7 @@ control over CDP, and the relay's access checks.
 Not built yet:
 
 1. **Daemon mode** — launchd agent, unix socket, attach/detach, wakes that
-   survive closing the terminal. Today `agent run` holds the session in the
+   survive closing the terminal. Today `ax run` holds the session in the
    foreground.
 2. **Notification sinks** — desktop and webhook, so `notify()` reaches a human
    who is not watching a terminal.

@@ -5,7 +5,7 @@
 //! the extension and confirm that a wrong token is refused, a non-extension
 //! origin is refused, and a correctly paired client can round-trip commands.
 
-use as_agent::relay::Relay;
+use ax::relay::Relay;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -13,7 +13,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Message, http::HeaderValue};
 
 fn temp_home(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("as-agent-relay-{name}"));
+    let dir = std::env::temp_dir().join(format!("ax-relay-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -98,7 +98,11 @@ async fn a_paired_extension_round_trips_commands() {
     let body: Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
     assert_eq!(body["ok"], json!(true), "the correct token must be accepted");
 
-    // Stand in for the extension: answer agent.tabs the way background.js does.
+    // Stand in for the extension, asserting the control method matches what
+    // extension/background.js switches on — a mismatch between the two sides
+    // would otherwise only surface against a real browser.
+    let (seen_tx, seen_rx) = tokio::sync::oneshot::channel::<String>();
+    let mut seen_tx = Some(seen_tx);
     tokio::spawn(async move {
         while let Some(Ok(message)) = socket.next().await {
             let Ok(text) = message.into_text() else {
@@ -107,6 +111,9 @@ async fn a_paired_extension_round_trips_commands() {
             let Ok(command) = serde_json::from_str::<Value>(&text) else {
                 continue;
             };
+            if let Some(tx) = seen_tx.take() {
+                let _ = tx.send(command["method"].as_str().unwrap_or_default().to_string());
+            }
             let id = command["id"].clone();
             let response = json!({
                 "id": id,
@@ -130,7 +137,12 @@ async fn a_paired_extension_round_trips_commands() {
     let client = relay.connect().await.unwrap();
     assert_eq!(client.kind, "extension");
 
-    let tabs = as_agent::browser::targets(&client).await.unwrap();
+    let tabs = ax::browser::targets(&client).await.unwrap();
+    assert_eq!(
+        seen_rx.await.unwrap(),
+        "ax.tabs",
+        "the control method must match the one background.js handles"
+    );
     assert_eq!(tabs[0]["id"], json!("7"));
     assert_eq!(tabs[0]["url"], json!("https://example.com"));
 }
