@@ -11,9 +11,13 @@
 pub mod agent;
 pub mod browser;
 pub mod cdp;
+pub mod daemon;
 pub mod chrome;
+pub mod config;
 pub mod event;
 pub mod host;
+pub mod ipc;
+pub mod launchd;
 pub mod isolate;
 pub mod llm;
 pub mod paths;

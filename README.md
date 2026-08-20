@@ -11,10 +11,16 @@ export AX_API_KEY=sk-...          # or OPENAI_API_KEY
 export AX_MODEL=gpt-4.1           # any OpenAI-compatible model
 export AX_BASE_URL=...            # optional: any compatible provider
 
+ax install                        # run the daemon at every login (once)
 ax run "keep the test suite green and open a PR for each fix"
 ax ls                             # what is running
-ax log <id> --follow              # replay history, then tail it live
+ax attach <id>                    # replay everything, then follow it live
+ax say <id> "try the other API"   # wake it with a message
 ```
+
+Sessions belong to a background daemon, not to your terminal: close the window
+and the goal keeps running. Attaching replays the whole history and then tails
+it, the way reconnecting to a tmux pane does.
 
 ## Why this shape
 
@@ -51,12 +57,32 @@ running for days and read the whole story.
 | `src/chrome.rs` | Picks and establishes a browser connection |
 | `extension/` | MV3 extension that bridges `chrome.debugger` to the relay |
 | `src/agent.rs` | The wake loop |
+| `src/daemon.rs` | The supervisor: owns running sessions, serves attach clients |
+| `src/ipc.rs` | The CLI ↔ daemon protocol |
+| `src/launchd.rs` | Registering the daemon as a login agent |
 | `src/llm.rs` | OpenAI chat-completions client (streaming, retries, weak-model fallback) |
 | `src/event.rs` | The durable append-only session log |
 | `src/prompt.rs` | System prompt and per-wake message |
 
 Session state lives in `~/.ax/sessions/<id>/`: `events.jsonl`, `ledger.md`,
-`meta.json`, `memory/`, `artifacts/`.
+`meta.json`, `schedule.json`, `memory/`, `artifacts/`.
+
+## The daemon
+
+`ax install` registers a launchd agent that starts at login and keeps running.
+`ax run` hands it the session — and starts one on demand if it is not up yet —
+so nothing depends on the terminal staying open.
+
+launchd gives the daemon almost no environment, so credentials cannot come from
+your shell profile. `ax install` captures them into `~/.ax/env` at mode 600,
+which also keeps the API key out of the plist, where it would sit
+world-readable.
+
+A restarted daemon resumes any session that was still in flight. The isolate
+does not survive — that is exactly why the ledger and the files on disk are the
+durable state — but `schedule.json` does, so a session told to check back in six
+hours does not lose those six hours to a reboot. The model is told it restarted
+and reads its ledger to work out where it was.
 
 ## Design notes
 
@@ -110,17 +136,16 @@ loopback-only binding, a 256-bit pairing token from `/dev/urandom`, and an
 ## Status
 
 Working end to end, covered by `cargo test` (no credentials or network needed):
-the isolate and its API, the wake loop (scheduling, sleeping, waking on process
-exit, completion), the durable event log and replay, the session CLI, browser
+the isolate and its API, the wake loop, the daemon and its attach protocol,
+restart recovery, the durable event log and replay, the session CLI, browser
 control over CDP, and the relay's access checks.
 
 Not built yet:
 
-1. **Daemon mode** — launchd agent, unix socket, attach/detach, wakes that
-   survive closing the terminal. Today `ax run` holds the session in the
-   foreground.
-2. **Notification sinks** — desktop and webhook, so `notify()` reaches a human
-   who is not watching a terminal.
-3. **Restart recovery** — re-arming persisted wakes from `schedule.json`.
-4. **In-wake compaction** — a very long single wake can still outgrow the
+1. **Notification sinks** — desktop and webhook, so `notify()` reaches a human
+   who is not watching a terminal. `notify()` currently only reaches the log.
+2. **In-wake compaction** — a very long single wake can still outgrow the
    context window; wake-to-wake cost is already flat.
+3. **Bounded spend** — the design calls for a virtual card with issuer-level
+   limits so the agent can transact unattended inside a hard envelope. Nothing
+   here implements that yet.

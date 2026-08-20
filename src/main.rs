@@ -1,8 +1,8 @@
 //! `ax` — an autonomous, goal-oriented agent that acts by writing code.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ax::session::Session;
-use ax::{agent, chrome, event, host, isolate, llm, paths, relay, ui};
+use ax::{agent, chrome, config, daemon, event, host, ipc, isolate, launchd, llm, paths, relay, ui};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -32,7 +32,34 @@ enum Command {
         /// Stop after this many completion tokens.
         #[arg(long)]
         max_tokens: Option<u64>,
+        /// Start the session and return, instead of following it.
+        #[arg(long)]
+        detach: bool,
+        /// Run in this process rather than handing the session to the daemon.
+        #[arg(long)]
+        foreground: bool,
     },
+    /// Attach to a session: replay everything it has done, then follow it live.
+    Attach {
+        id: String,
+        /// Replay from this event onwards (default: the beginning).
+        #[arg(long, default_value = "0")]
+        from: u64,
+    },
+    /// Send a message to a running session, waking it.
+    Say {
+        id: String,
+        #[arg(required = true, num_args = 1..)]
+        text: Vec<String>,
+    },
+    /// Stop supervising a session.
+    Stop { id: String },
+    /// Run the supervisor in the foreground. launchd invokes this.
+    Daemon,
+    /// Install the daemon so sessions keep running whenever you are logged in.
+    Install,
+    /// Remove the daemon. Sessions on disk are left alone.
+    Uninstall,
     /// List sessions.
     Ls,
     /// Replay a session's history, optionally following it live.
@@ -61,8 +88,36 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Run { goal, model, max_wakes, max_tokens } => {
-            run(goal.join(" "), model, max_wakes, max_tokens).await
+        Command::Run {
+            goal,
+            model,
+            max_wakes,
+            max_tokens,
+            detach,
+            foreground,
+        } => {
+            run(
+                goal.join(" "),
+                model,
+                max_wakes,
+                max_tokens,
+                detach,
+                foreground,
+            )
+            .await
+        }
+        Command::Attach { id, from } => attach(&id, from).await,
+        Command::Say { id, text } => say(&id, &text.join(" ")).await,
+        Command::Stop { id } => stop(&id).await,
+        Command::Daemon => {
+            config::load_env_file()?;
+            daemon::Daemon::start().await
+        }
+        Command::Install => install(),
+        Command::Uninstall => {
+            launchd::uninstall()?;
+            println!("daemon removed");
+            Ok(())
         }
         Command::Ls => list(),
         Command::Log { id, follow } => show_log(&id, follow).await,
@@ -146,9 +201,39 @@ async fn run(
     model: Option<String>,
     max_wakes: Option<u64>,
     max_tokens: Option<u64>,
+    detach: bool,
+    foreground: bool,
 ) -> Result<()> {
-    let config = llm::LlmConfig::from_env(model)?;
     let cwd = std::env::current_dir()?;
+
+    if !foreground {
+        // Hand the session to the daemon so it outlives this terminal.
+        ensure_daemon().await?;
+        let id = match daemon::request(&ipc::Request::Create {
+            goal: goal.clone(),
+            cwd: cwd.to_string_lossy().to_string(),
+            model,
+            max_wakes,
+            max_tokens,
+        })
+        .await?
+        {
+            ipc::Response::Created { id } => id,
+            ipc::Response::Error { message } => anyhow::bail!(message),
+            _ => anyhow::bail!("the daemon gave an unexpected answer"),
+        };
+
+        println!("session {}  {}", ui::bold(&id), ui::dim(&cwd.display().to_string()));
+        if detach {
+            println!("{}", ui::dim(&format!("following: ax attach {id}")));
+            return Ok(());
+        }
+        println!("{}", ui::dim("— attached; ctrl-c detaches, the session keeps running —"));
+        return attach(&id, 0).await;
+    }
+
+    // Foreground mode: useful for debugging, and for running without a daemon.
+    let config = llm::LlmConfig::from_env(model)?;
     let session = Session::create(&goal, &cwd, &config.model)?;
     println!(
         "session {}  {}  {}",
@@ -156,8 +241,7 @@ async fn run(
         ui::dim(&config.model),
         ui::dim(&cwd.display().to_string())
     );
-    // Everything the agent does is rendered from the same event log an
-    // attaching client would read, so the live view and the replay agree.
+
     let mut live = session.log.subscribe();
     tokio::spawn(async move {
         while let Ok(logged) = live.recv().await {
@@ -179,6 +263,110 @@ async fn run(
         browser_manager().await?,
     )?;
     agent.run().await
+}
+
+/// Start the daemon if it is not already answering.
+async fn ensure_daemon() -> Result<()> {
+    if daemon::is_running().await {
+        return Ok(());
+    }
+
+    // `process_group` lives on the unix extension trait.
+    use std::os::unix::process::CommandExt;
+
+    let binary = std::env::current_exe()?;
+    std::process::Command::new(&binary)
+        .arg("daemon")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        // Detach it from this terminal, or closing the window would take the
+        // daemon — and every session — down with it.
+        .process_group(0)
+        .spawn()
+        .context("could not start the ax daemon")?;
+
+    for _ in 0..100 {
+        if daemon::is_running().await {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    anyhow::bail!("the daemon did not come up; try `ax daemon` to see why")
+}
+
+/// Replay a session, then follow it. Ctrl-C detaches without stopping it.
+async fn attach(id: &str, from: u64) -> Result<()> {
+    if !daemon::is_running().await {
+        // Without a daemon there is nothing live to follow, but the log on
+        // disk is still the complete story.
+        return show_log(id, false).await;
+    }
+
+    let socket = paths::daemon_socket()?;
+    let stream = tokio::net::UnixStream::connect(&socket).await?;
+    let (reader, mut writer) = stream.into_split();
+
+    let mut line = serde_json::to_string(&ipc::Request::Attach {
+        id: id.to_string(),
+        from_seq: from,
+    })?;
+    line.push('\n');
+    tokio::io::AsyncWriteExt::write_all(&mut writer, line.as_bytes()).await?;
+    tokio::io::AsyncWriteExt::flush(&mut writer).await?;
+
+    let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(reader));
+    while let Some(line) = lines.next_line().await? {
+        match serde_json::from_str::<ipc::Response>(&line) {
+            Ok(ipc::Response::Event { event }) => ui::render(&event),
+            Ok(ipc::Response::Error { message }) => anyhow::bail!(message),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+async fn say(id: &str, text: &str) -> Result<()> {
+    match daemon::request(&ipc::Request::Say {
+        id: id.to_string(),
+        text: text.to_string(),
+    })
+    .await?
+    {
+        ipc::Response::Error { message } => anyhow::bail!(message),
+        _ => {
+            println!("{}", ui::dim("delivered; the session will wake"));
+            Ok(())
+        }
+    }
+}
+
+async fn stop(id: &str) -> Result<()> {
+    match daemon::request(&ipc::Request::Stop { id: id.to_string() }).await? {
+        ipc::Response::Error { message } => anyhow::bail!(message),
+        _ => {
+            println!("stopped {id}");
+            Ok(())
+        }
+    }
+}
+
+/// Capture the current configuration and register the launchd agent.
+fn install() -> Result<()> {
+    let saved = config::save_env_file()?;
+    if saved.is_empty() {
+        println!(
+            "{}",
+            ui::dim("warning: no AX_API_KEY in this shell — set one and re-run `ax install`")
+        );
+    } else {
+        println!("saved {} to {}", saved.join(", "), config::env_file()?.display());
+    }
+
+    let path = launchd::install()?;
+    println!("daemon installed: {}", path.display());
+    println!("{}", ui::dim("it starts now and at every login; `ax uninstall` removes it"));
+    Ok(())
 }
 
 fn list() -> Result<()> {

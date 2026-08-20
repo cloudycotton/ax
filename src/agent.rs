@@ -19,7 +19,7 @@ use crate::host::{HostContext, WakeDecision};
 use crate::isolate::Isolate;
 use crate::llm::{self, LlmClient, Message};
 use crate::prompt;
-use crate::session::{Session, Status};
+use crate::session::{Schedule, Session, Status};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::io::Write;
@@ -65,6 +65,10 @@ pub struct Agent {
     isolate: Isolate,
     host: Arc<HostContext>,
     exits: mpsc::UnboundedReceiver<(String, Option<i32>)>,
+    /// Messages sent into the session by a person, via `ax say`.
+    inbox: mpsc::UnboundedReceiver<String>,
+    /// Kept so the channel stays open even when nobody holds a sender.
+    inbox_tx: mpsc::UnboundedSender<String>,
     limits: Limits,
     /// Things that happened while the agent was asleep, reported on next wake.
     pending: Vec<String>,
@@ -87,21 +91,36 @@ impl Agent {
             browser,
         )?);
         let isolate = Isolate::start(host.clone())?;
+        let (inbox_tx, inbox) = mpsc::unbounded_channel();
         Ok(Self {
             session,
             llm,
             isolate,
             host,
             exits,
+            inbox,
+            inbox_tx,
             limits,
             pending: Vec::new(),
             tokens_used: 0,
         })
     }
 
+    /// A handle for delivering messages from a person into this session.
+    /// Anything sent here wakes the agent as soon as it is next idle.
+    pub fn inbox(&self) -> mpsc::UnboundedSender<String> {
+        self.inbox_tx.clone()
+    }
+
     /// Run until the goal is done, a limit is hit, or the process is stopped.
     pub async fn run(&mut self) -> Result<()> {
-        let mut reason = WakeReason::Initial;
+        // A session with wakes behind it is being resumed after a restart:
+        // honour whatever it had scheduled instead of barging in immediately.
+        let mut reason = if self.session.meta.wakes == 0 {
+            WakeReason::Initial
+        } else {
+            self.resume().await
+        };
         loop {
             if let Some(max) = self.limits.max_wakes {
                 if self.session.meta.wakes >= max {
@@ -126,15 +145,24 @@ impl Agent {
             match decision {
                 WakeDecision::Done { summary } => {
                     self.session.log.append(EventKind::Done { summary })?;
+                    self.session.clear_schedule();
                     self.session.set_status(Status::Done)?;
                     return Ok(());
                 }
                 WakeDecision::At { at, note } => {
+                    // Apply the floor first: the log and the schedule must say
+                    // when the agent will really wake, not what it asked for.
+                    let at = self.not_before(at);
                     self.session.log.append(EventKind::Scheduled {
                         at: Some(at),
                         on: None,
                         note: note.clone(),
                     })?;
+                    self.session.save_schedule(&Schedule {
+                        at: Some(at),
+                        on_exit: None,
+                        note: note.clone(),
+                    });
                     self.session.set_status(Status::Sleeping)?;
                     reason = self.sleep_until(at, note).await;
                 }
@@ -144,9 +172,40 @@ impl Agent {
                         on: Some(format!("exit of `{name}`")),
                         note: note.clone(),
                     })?;
+                    self.session.save_schedule(&Schedule {
+                        at: None,
+                        on_exit: Some(name.clone()),
+                        note: note.clone(),
+                    });
                     self.session.set_status(Status::Sleeping)?;
                     reason = self.wait_for_exit(&name).await;
                 }
+            }
+        }
+    }
+
+    /// Work out how a restarted session should re-enter its loop.
+    ///
+    /// The isolate does not survive a restart — that is why the ledger and the
+    /// files on disk are the source of truth — but the *schedule* does, so a
+    /// session told to check back in six hours does not lose those six hours
+    /// just because the machine rebooted.
+    async fn resume(&mut self) -> WakeReason {
+        let Some(schedule) = self.session.load_schedule() else {
+            return WakeReason::Restart;
+        };
+        match schedule.at {
+            // A process it was waiting on cannot have survived the restart.
+            None => WakeReason::Restart,
+            Some(at) if at <= Utc::now() => WakeReason::Restart,
+            Some(at) => {
+                let _ = self.session.log.append(EventKind::Scheduled {
+                    at: Some(at),
+                    on: None,
+                    note: format!("resumed after restart — {}", schedule.note),
+                });
+                let _ = self.session.set_status(Status::Sleeping);
+                self.sleep_until(at, schedule.note).await
             }
         }
     }
@@ -312,9 +371,18 @@ wake now.".to_string(),
     }
 
     /// Sleep until `at`, waking early if a background process exits.
+    /// Never sooner than the minimum wake interval. A confused model asking to
+    /// wake every second is the classic way to burn a budget overnight, so the
+    /// floor is enforced here rather than trusted to the prompt.
+    fn not_before(&self, at: DateTime<Utc>) -> DateTime<Utc> {
+        let floor = Utc::now()
+            + chrono::Duration::from_std(self.limits.min_wake_interval)
+                .unwrap_or_else(|_| chrono::Duration::seconds(10));
+        at.max(floor)
+    }
+
     async fn sleep_until(&mut self, at: DateTime<Utc>, note: String) -> WakeReason {
-        let floor = Utc::now() + chrono::Duration::from_std(self.limits.min_wake_interval).unwrap();
-        let at = at.max(floor);
+        let at = self.not_before(at);
 
         loop {
             let remaining = (at - Utc::now()).to_std().unwrap_or(Duration::ZERO);
@@ -327,6 +395,13 @@ wake now.".to_string(),
                     // timer that was pending, so wake now and say why.
                     return WakeReason::ProcessExit { name, code };
                 }
+                Some(text) = self.inbox.recv() => {
+                    // A person always outranks a timer.
+                    let _ = self.session.log.append(EventKind::UserMessage {
+                        text: text.clone(),
+                    });
+                    return WakeReason::User { text };
+                }
             }
         }
     }
@@ -335,21 +410,29 @@ wake now.".to_string(),
     /// reported at the next wake rather than triggering one.
     async fn wait_for_exit(&mut self, name: &str) -> WakeReason {
         loop {
-            match self.exits.recv().await {
-                Some((exited, code)) if exited == name => {
-                    return WakeReason::ProcessExit { name: exited, code };
-                }
-                Some((exited, code)) => {
-                    self.pending.push(format!(
-                        "process `{exited}` exited with {}",
-                        code.map(|c| c.to_string()).unwrap_or_else(|| "a signal".into())
-                    ));
-                }
-                None => {
-                    // No senders left; nothing can wake us on this path.
-                    return WakeReason::Timer {
-                        note: format!("no process named `{name}` can report an exit"),
-                    };
+            tokio::select! {
+                exit = self.exits.recv() => match exit {
+                    Some((exited, code)) if exited == name => {
+                        return WakeReason::ProcessExit { name: exited, code };
+                    }
+                    Some((exited, code)) => {
+                        self.pending.push(format!(
+                            "process `{exited}` exited with {}",
+                            code.map(|c| c.to_string()).unwrap_or_else(|| "a signal".into())
+                        ));
+                    }
+                    None => {
+                        // No senders left; nothing can wake us on this path.
+                        return WakeReason::Timer {
+                            note: format!("no process named `{name}` can report an exit"),
+                        };
+                    }
+                },
+                Some(text) = self.inbox.recv() => {
+                    let _ = self.session.log.append(EventKind::UserMessage {
+                        text: text.clone(),
+                    });
+                    return WakeReason::User { text };
                 }
             }
         }

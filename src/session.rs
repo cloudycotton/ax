@@ -204,3 +204,37 @@ fn claim_session_dir(cwd: &Path) -> Result<(String, PathBuf)> {
     }
     anyhow::bail!("could not allocate a unique session id for {}", cwd.display())
 }
+
+/// A session's pending wake, persisted so a restart does not lose it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Schedule {
+    /// Wake at this time.
+    pub at: Option<DateTime<Utc>>,
+    /// Wake when this background process exits. Not durable across a restart —
+    /// the process died with the daemon — but recorded so the reason is visible.
+    pub on_exit: Option<String>,
+    pub note: String,
+}
+
+impl Session {
+    fn schedule_path(&self) -> PathBuf {
+        self.dir.join("schedule.json")
+    }
+
+    /// Record the pending wake. Best-effort: failing to write it costs us the
+    /// timer on a restart, which is not worth aborting a live session over.
+    pub fn save_schedule(&self, schedule: &Schedule) {
+        if let Ok(raw) = serde_json::to_string_pretty(schedule) {
+            let _ = std::fs::write(self.schedule_path(), raw);
+        }
+    }
+
+    pub fn load_schedule(&self) -> Option<Schedule> {
+        let raw = std::fs::read_to_string(self.schedule_path()).ok()?;
+        serde_json::from_str(&raw).ok()
+    }
+
+    pub fn clear_schedule(&self) {
+        let _ = std::fs::remove_file(self.schedule_path());
+    }
+}

@@ -3,89 +3,19 @@
 //! whole path works: SSE parsing, tool-call assembly, execution in the isolate,
 //! the scheduling decision, and the durable event log.
 
+mod common;
+
 use ax::agent::{Agent, Limits};
 use ax::chrome::BrowserManager;
 use ax::relay::Relay;
 use ax::event::{self, EventKind};
 use ax::llm::{LlmClient, LlmConfig};
 use ax::session::{Session, Status};
-use serde_json::json;
+use common::{Turn, scripted_server};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 
-/// One scripted assistant turn.
-enum Turn {
-    /// Emit a proper tool call running this code.
-    ToolCall(&'static str),
-    /// Emit prose only — exercises the fenced-code fallback path.
-    Text(&'static str),
-}
-
-/// A minimal HTTP server that replies to each request with the next scripted
-/// turn, encoded as an SSE stream in OpenAI's chunk format.
-async fn scripted_server(turns: Vec<Turn>) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let mut index = 0usize;
-        loop {
-            let Ok((mut socket, _)) = listener.accept().await else {
-                return;
-            };
-
-            // Read the request head; we do not care about the body's contents,
-            // only that a request arrived.
-            let mut buf = vec![0u8; 65536];
-            let _ = socket.read(&mut buf).await;
-
-            let body = match turns.get(index) {
-                Some(Turn::ToolCall(code)) => {
-                    let arguments = json!({ "code": code }).to_string();
-                    let chunk = json!({
-                        "choices": [{
-                            "delta": {
-                                "tool_calls": [{
-                                    "index": 0,
-                                    "id": format!("call-{index}"),
-                                    "type": "function",
-                                    "function": { "name": "run_js", "arguments": arguments }
-                                }]
-                            }
-                        }]
-                    });
-                    format!("data: {chunk}\n\ndata: [DONE]\n\n")
-                }
-                Some(Turn::Text(text)) => {
-                    let chunk = json!({
-                        "choices": [{ "delta": { "content": text } }]
-                    });
-                    format!("data: {chunk}\n\ndata: [DONE]\n\n")
-                }
-                None => {
-                    // Ran out of script: emit an empty turn.
-                    let chunk = json!({ "choices": [{ "delta": { "content": "" } }] });
-                    format!("data: {chunk}\n\ndata: [DONE]\n\n")
-                }
-            };
-            index += 1;
-
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = socket.write_all(response.as_bytes()).await;
-            let _ = socket.flush().await;
-        }
-    });
-
-    format!("http://{addr}/v1")
-}
-
-/// A browser manager the tests never actually connect through. Each gets its
-/// own relay port so the suite can run in parallel.
+/// A browser manager the tests never connect through. Each gets its own relay
+/// port so the suite can run in parallel.
 fn browser(port: u16) -> std::sync::Arc<BrowserManager> {
     let home = std::env::temp_dir().join("ax-tests");
     let relay = Relay::new(&home, port).unwrap();
@@ -235,4 +165,58 @@ async fn state_persists_across_wakes_and_fenced_code_runs() {
         matches!(&e.kind, EventKind::Done { summary } if summary.contains("tally reached 2"))
     });
     assert!(finished, "state did not survive the wake boundary");
+}
+
+/// The recorded wake time must be the one that is actually honoured. If the
+/// minimum-interval floor were applied after logging, the event log and
+/// `schedule.json` would both claim a time that never happens — and a resumed
+/// session would trust it.
+#[tokio::test(flavor = "current_thread")]
+async fn the_logged_schedule_reflects_the_enforced_floor() {
+    const PORT: u16 = 18413;
+    test_home();
+
+    let base_url = scripted_server(vec![
+        // Ask to wake far sooner than the floor allows.
+        Turn::ToolCall(r#"wake_in(50, "much too soon");"#),
+        Turn::ToolCall(r#"done("finished");"#),
+    ])
+    .await;
+
+    let cwd = std::env::current_dir().unwrap();
+    let session = Session::create("respect the wake floor", &cwd, "mock-model").unwrap();
+    let id = session.meta.id.clone();
+    let log_path = session.log.path().to_path_buf();
+
+    let client = LlmClient::new(config_for(base_url)).unwrap();
+    let limits = Limits {
+        min_wake_interval: Duration::from_secs(2),
+        ..Default::default()
+    };
+    let mut agent = Agent::new(session, client, limits, browser(PORT)).unwrap();
+
+    let before = chrono::Utc::now();
+    tokio::time::timeout(Duration::from_secs(60), agent.run())
+        .await
+        .expect("the wake loop hung")
+        .unwrap();
+
+    let scheduled = event::read_all(&log_path)
+        .unwrap()
+        .into_iter()
+        .find_map(|logged| match logged.kind {
+            EventKind::Scheduled { at: Some(at), .. } => Some(at),
+            _ => None,
+        })
+        .expect("no scheduled event was recorded");
+
+    let delay = (scheduled - before).num_milliseconds();
+    assert!(
+        delay >= 2000,
+        "logged a wake {delay}ms out, sooner than the 2s floor that is enforced"
+    );
+
+    // And the session really did wait that long rather than spinning.
+    let session = Session::load(&id).unwrap();
+    assert_eq!(session.meta.wakes, 2);
 }
