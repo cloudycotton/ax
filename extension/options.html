@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Agent Browser Bridge</title>
+    <style>
+      body {
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0;
+        padding: 16px;
+        width: 340px;
+        color: #1a1a1a;
+        background: #fff;
+      }
+      h1 { font-size: 14px; margin: 0 0 4px; }
+      p { margin: 0 0 12px; color: #555; }
+      code {
+        background: #f3f3f3;
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-size: 12px;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        padding: 7px 8px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+      }
+      button {
+        margin-top: 10px;
+        padding: 7px 14px;
+        border: 0;
+        border-radius: 5px;
+        background: #1a1a1a;
+        color: #fff;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #status { margin-top: 10px; font-weight: 500; }
+      .ok { color: #137333; }
+      .warn { color: #b06000; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #1f1f1f; color: #eee; }
+        p { color: #aaa; }
+        code { background: #333; }
+        input { background: #2a2a2a; color: #eee; border-color: #444; }
+        button { background: #eee; color: #1a1a1a; }
+        .ok { color: #6dd58c; }
+        .warn { color: #f5b26b; }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Agent Browser Bridge</h1>
+    <p>
+      Paste the pairing token so the agent on this machine can drive this
+      browser. Get it by running <code>agent pair</code>.
+    </p>
+    <input id="token" type="password" placeholder="pairing token" autocomplete="off" />
+    <button id="save">Save &amp; connect</button>
+    <div id="status"></div>
+    <script src="options.js"></script>
+  </body>
+</html>
