@@ -63,6 +63,16 @@ fetch() {
   return 1
 }
 
+# asset_id_for <release-json> <asset-name>
+asset_id_for() {
+  # Collapse newlines before splitting on `{`, so each JSON object lands on one
+  # line and an asset's id and name can be read together.
+  tr -d '\n' < "$1" | tr '{' '\n' \
+    | grep -F "\"$2\"" \
+    | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+    | head -1
+}
+
 main() {
   need curl
   need tar
@@ -96,16 +106,14 @@ main() {
 
   asset="ax-${version}-${target}.tar.gz"
 
-  # Look the asset up by name and use its API url: that is the form that
-  # supports token auth, which browser_download_url does not.
-  asset_id="$(tr '{' '\n' < "$tmp/release.json" \
-    | grep -F "\"name\":\"$asset\"" \
-    | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)"
+  # Look each asset up by name and use its API url: that is the form that
+  # supports token auth, which browser_download_url does not. Splitting on `{`
+  # puts every asset's id and name in one chunk, and the patterns tolerate the
+  # whitespace GitHub's pretty-printed JSON puts after each colon.
+  asset_id="$(asset_id_for "$tmp/release.json" "$asset")"
   [ -n "$asset_id" ] || die "release v$version has no build for $target"
 
-  sums_id="$(tr '{' '\n' < "$tmp/release.json" \
-    | grep -F '"name":"checksums.txt"' \
-    | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)"
+  sums_id="$(asset_id_for "$tmp/release.json" "checksums.txt")"
 
   dim "downloading $asset"
   fetch "https://api.github.com/repos/$REPO/releases/assets/$asset_id" \
