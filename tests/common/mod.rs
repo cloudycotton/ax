@@ -3,6 +3,8 @@
 //! It lets the whole harness be exercised — SSE parsing, tool-call assembly,
 //! execution, scheduling — without credentials or network access.
 
+use ax::chrome::BrowserManager;
+use ax::relay::Relay;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -18,6 +20,7 @@ pub enum Turn {
 }
 
 /// Serve the given turns, one per request, and return the base URL.
+#[allow(dead_code)]
 pub async fn scripted_server(turns: Vec<Turn>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -69,4 +72,30 @@ pub async fn scripted_server(turns: Vec<Turn>) -> String {
     });
 
     format!("http://{addr}/v1")
+}
+/// A browser manager the tests never connect through. Each gets its own relay
+/// port so the suite can run in parallel.
+#[allow(dead_code)]
+pub fn browser(port: u16) -> std::sync::Arc<BrowserManager> {
+    let home = std::env::temp_dir().join("ax-tests");
+    let relay = Relay::new(&home, port).unwrap();
+    std::sync::Arc::new(BrowserManager::new(home, relay))
+}
+
+/// Point AX_HOME at a scratch directory so tests never touch ~/.ax.
+///
+/// Set exactly once for the whole test binary: `set_var` is process-global, so
+/// tests running concurrently must not each point it somewhere different.
+/// Sessions get distinct ids, so sharing one home is safe.
+#[allow(dead_code)]
+pub fn test_home() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join("ax-tests");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Safety: this runs before any agent code reads the variable, and the
+        // Once guarantees no concurrent writer.
+        unsafe { std::env::set_var("AX_HOME", &dir) };
+    });
 }

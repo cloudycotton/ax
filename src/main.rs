@@ -96,8 +96,12 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
-    /// Show the pairing token and how to install the browser extension.
-    Pair,
+    /// Connect ax to your own browser via the extension.
+    Pair {
+        /// Print the token and exit instead of waiting for the extension.
+        #[arg(long)]
+        no_wait: bool,
+    },
     /// Run JavaScript in a throwaway isolate. For debugging the harness.
     #[command(hide = true)]
     Js {
@@ -158,7 +162,7 @@ async fn main() -> Result<()> {
         Command::Provider { name } => setup::choose_provider(name).await,
         Command::Config => setup::show_config(),
         Command::Update { check } => update::run(check).await,
-        Command::Pair => pair(),
+        Command::Pair { no_wait } => pair(no_wait).await,
         Command::Js { code, timeout } => scratch_js(&code.join(" "), timeout).await,
     }
 }
@@ -176,6 +180,7 @@ async fn scratch_js(code: &str, timeout_secs: u64) -> Result<()> {
         log.clone(),
         exits,
         browser_manager().await?,
+        true,
     )?);
 
     let mut console = log.subscribe();
@@ -495,34 +500,94 @@ async fn show_log(id: &str, follow: bool) -> Result<()> {
     Ok(())
 }
 
-/// Print the pairing token and the one-time setup steps.
-fn pair() -> Result<()> {
+/// Walk through connecting ax to the user's own browser, then wait for the
+/// extension to actually dial in — an install that silently did not work is
+/// the most likely failure, and worth catching here rather than mid-goal.
+async fn pair(no_wait: bool) -> Result<()> {
     let home = paths::agent_home()?;
     paths::ensure_dir(&home)?;
     let relay = relay::Relay::new(&home, relay::DEFAULT_RELAY_PORT)?;
-    let extension = std::env::current_dir()?.join("extension");
+    let listening = relay.listen().await.is_ok();
+    let extension = extension_dir();
 
-    println!("{}", ui::bold("Pair the browser extension"));
+    println!("{}", ui::bold("Connect ax to your browser"));
     println!();
-    println!("The agent drives your real browser — the one with your logins — through a");
-    println!("small extension. Chrome will not expose the default profile any other way.");
+    println!("ax drives your own browser — the one already signed in to your accounts.");
+    println!("Chrome only allows that through an extension, so this is a one-time setup.");
     println!();
     println!("  1. Open {}", ui::bold("chrome://extensions"));
-    println!("  2. Turn on {}", ui::bold("Developer mode"));
-    println!("  3. {} and choose:", ui::bold("Load unpacked"));
-    println!("     {}", extension.display());
-    println!("  4. Open the extension and paste this token:");
+    println!("  2. Turn on {} (top right)", ui::bold("Developer mode"));
+    println!("  3. Click {} and choose:", ui::bold("Load unpacked"));
+    println!("     {}", ui::bold(&extension.display().to_string()));
+    println!("  4. Click the ax icon in the toolbar and paste this token:");
     println!();
     println!("     {}", ui::bold(relay.token()));
     println!();
-    println!(
-        "{}",
-        ui::dim(&format!(
-            "The token is stored at {} and guards a socket that can drive your logged-in\nbrowser. Treat it like a password; anyone who has it can act as you.",
-            relay::token_path(&home).display()
-        ))
-    );
+
+    if no_wait || !listening {
+        if !listening {
+            println!(
+                "{}",
+                ui::dim("another ax process owns the relay port; it will accept the connection")
+            );
+        }
+        return Ok(());
+    }
+
+    print!("{}", ui::dim("waiting for the extension… "));
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+
+    if relay
+        .wait_for_extension(std::time::Duration::from_secs(180))
+        .await
+    {
+        println!("{}", ui::ok("connected"));
+        println!();
+        println!(
+            "{}",
+            ui::dim("ax will use this browser from now on, opening it if it is closed.")
+        );
+    } else {
+        println!("{}", ui::bad("timed out"));
+        println!();
+        println!("If the extension is installed, check that:");
+        println!("  · the token above matches the one in the extension");
+        println!("  · chrome://extensions shows it enabled, with no errors");
+        println!(
+            "  · this machine allows connections to 127.0.0.1:{}",
+            relay.port()
+        );
+        println!();
+        println!(
+            "{}",
+            ui::dim(
+                "Without it ax still works, using its own browser profile — which has none of your logins."
+            )
+        );
+    }
     Ok(())
+}
+
+/// Where the unpacked extension lives: next to the binary when installed, or
+/// in the source tree when run from a checkout.
+fn extension_dir() -> std::path::PathBuf {
+    if let Ok(home) = paths::agent_home() {
+        let installed = home.join("extension");
+        if installed.join("manifest.json").exists() {
+            return installed;
+        }
+    }
+    let local = std::env::current_dir()
+        .unwrap_or_default()
+        .join("extension");
+    if local.join("manifest.json").exists() {
+        return local;
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("extension")))
+        .unwrap_or(local)
 }
 
 fn remove(id: &str) -> Result<()> {

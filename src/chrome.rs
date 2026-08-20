@@ -23,6 +23,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
+/// How long to wait for the extension after opening the browser. Long enough
+/// for a cold start and the service worker waking up, short enough that a
+/// missing extension does not stall a wake.
+const EXTENSION_WAIT: Duration = Duration::from_secs(20);
+
 const CHROME_CANDIDATES: &[&str] = &[
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
@@ -59,12 +64,33 @@ impl BrowserManager {
             return Ok(existing.clone());
         }
 
-        // The extension, if the user has installed and paired it, gives us
-        // their actual browser. Always prefer it.
+        // The extension gives us the user's actual browser, with their logins.
+        // Always prefer it.
         if self.relay.has_extension() {
             let client = self.relay.connect().await?;
             *slot = Some(client.clone());
             return Ok(client);
+        }
+
+        // Paired before, but nothing connected right now: their browser is
+        // simply closed. Open it and give the extension a moment to dial in,
+        // rather than silently falling back to a profile with no logins.
+        if self.relay.has_paired_before() {
+            match open_user_browser() {
+                Ok(app) => {
+                    eprintln!("\x1b[2mopening {app} and waiting for the ax extension…\x1b[0m");
+                    if self.relay.wait_for_extension(EXTENSION_WAIT).await {
+                        let client = self.relay.connect().await?;
+                        *slot = Some(client.clone());
+                        return Ok(client);
+                    }
+                    eprintln!(
+                        "\x1b[33m! the extension did not connect; using ax's own browser \
+profile instead (no logins). Check chrome://extensions.\x1b[0m"
+                    );
+                }
+                Err(err) => eprintln!("\x1b[33m! could not open your browser: {err}\x1b[0m"),
+            }
         }
 
         let client = self.launch_managed().await?;
@@ -152,6 +178,57 @@ AX_CHROME to the executable path."
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+}
+
+/// Bring the user's own browser up, without a debugging port — the extension
+/// is what reaches inside it. On macOS this goes through `open -a` so the
+/// running instance is reused rather than a second one started.
+fn open_user_browser() -> Result<String> {
+    let binary =
+        find_browser().ok_or_else(|| anyhow!("no Chromium-based browser found to open"))?;
+
+    #[cfg(target_os = "macos")]
+    {
+        // /Applications/Google Chrome.app/Contents/MacOS/… -> the .app bundle
+        let app = binary
+            .ancestors()
+            .find(|path| path.extension().is_some_and(|ext| ext == "app"))
+            .ok_or_else(|| {
+                anyhow!(
+                    "could not find the application bundle for {}",
+                    binary.display()
+                )
+            })?;
+        let name = app
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "your browser".into());
+        let status = std::process::Command::new("open")
+            .arg("-a")
+            .arg(app)
+            .status()
+            .context("could not run `open`")?;
+        if !status.success() {
+            bail!("`open -a` failed for {}", app.display());
+        }
+        Ok(name)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let name = binary
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "your browser".into());
+        std::process::Command::new(&binary)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn()
+            .with_context(|| format!("could not start {}", binary.display()))?;
+        Ok(name)
     }
 }
 

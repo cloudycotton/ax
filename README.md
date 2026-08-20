@@ -132,16 +132,21 @@ and reads its ledger to work out where it was.
 
 ## Browser
 
-The agent drives a real Chrome. Two transports, one interface:
+ax drives **your** browser, with your logins, through a small extension:
 
-- **The user's own browser**, through the extension in `extension/`. This is the
-  one that matters — it has their sessions and logins. Chrome 136+ refuses
-  `--remote-debugging-port` on the default profile, so `chrome.debugger` inside
-  an extension is the only sanctioned way in. Run `ax pair` for setup.
-- **A browser the agent launches**, on its own profile under `~/.ax/chrome`.
-  No install required, but signed into nothing until someone signs in.
+```bash
+ax pair      # prints a token, waits for the extension to connect
+```
 
-Reading a page is designed for models without vision:
+Chrome 136+ refuses `--remote-debugging-port` on the default profile — the one
+holding your sessions — so `chrome.debugger` inside an extension is the only
+sanctioned way in. See [extension/README.md](extension/README.md) for setup and
+troubleshooting. Once paired, ax opens your browser itself when it needs one.
+
+Without the extension ax still works, using a browser it launches on its own
+profile under `~/.ax/chrome`. Same API, no logins.
+
+Reading a page does not require vision:
 
 ```js
 const page = await browser.open("https://example.com");
@@ -159,6 +164,23 @@ ignore anything else.
 The relay socket can drive a logged-in browser, so it is guarded three ways:
 loopback-only binding, a 256-bit pairing token from `/dev/urandom`, and an
 `Origin` check that only accepts `chrome-extension://`.
+
+## Models that can and cannot see
+
+ax adapts to the model you configured. A text-only model is told plainly that
+screenshots are useless to it and to work from the accessibility tree; a
+multimodal one additionally gets `see(path)`, which puts an image — a file, or
+what `page.screenshot()` returns — in front of it on the next turn. Vision is
+detected from the model name and shown by `ax config`.
+
+## Context
+
+A wake that runs long is held under a 150K-token ceiling. Older tool output is
+shrunk first, then whole turns are dropped, always keeping a tool call and its
+result together. Before that happens the agent is asked to write its ledger and
+schedule the next wake instead — a fresh context with a good ledger beats a
+compacted one. Wake-to-wake, cost is already flat: every wake rebuilds from the
+system prompt, the ledger, and the state manifest.
 
 ## Status
 

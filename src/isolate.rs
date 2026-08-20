@@ -545,6 +545,31 @@ fn install_globals(ctx: &rquickjs::Ctx<'_>, host: &Arc<HostContext>) -> Result<(
         )?;
     }
 
+    // images — only meaningful when the model can actually look at them
+    {
+        let host = host.clone();
+        globals.set(
+            "__see",
+            Func::from(move |input: String| {
+                if !host.vision {
+                    return err_json(
+                        "this model cannot see images. Use page.snapshot() for pages, or read the \
+data another way — a screenshot would be wasted here.",
+                    );
+                }
+                match crate::image::resolve(&input, |path| host.resolve_path(path)) {
+                    Ok(data_uri) => {
+                        let bytes = data_uri.len();
+                        host.attach_image(data_uri);
+                        ok_json(json!({ "attached": true, "encoded_bytes": bytes }))
+                    }
+                    Err(err) => err_json(err),
+                }
+            }),
+        )?;
+    }
+    globals.set("VISION", host.vision)?;
+
     // constants
     globals.set("GOAL_DIR", host.goal_dir.to_string_lossy().to_string())?;
     globals.set(

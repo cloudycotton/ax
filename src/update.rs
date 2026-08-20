@@ -285,6 +285,21 @@ fn install_over(exe: &Path, archive: &[u8]) -> Result<()> {
             bail!("tar failed to unpack the release archive");
         }
 
+        // Refresh the extension too, so a pinned old copy never drifts from
+        // the protocol the binary speaks.
+        let unpacked_extension = staging.join("extension");
+        if unpacked_extension.join("manifest.json").exists()
+            && let Ok(home) = crate::paths::agent_home()
+        {
+            {
+                let target = home.join("extension");
+                let _ = std::fs::remove_dir_all(&target);
+                if let Err(err) = copy_dir(&unpacked_extension, &target) {
+                    eprintln!("\x1b[33m! could not refresh the browser extension: {err}\x1b[0m");
+                }
+            }
+        }
+
         let unpacked = find_binary(&staging)?;
         #[cfg(unix)]
         {
@@ -298,6 +313,20 @@ fn install_over(exe: &Path, archive: &[u8]) -> Result<()> {
 
     let _ = std::fs::remove_dir_all(&staging);
     result
+}
+
+fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 fn find_binary(dir: &Path) -> Result<PathBuf> {

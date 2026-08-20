@@ -27,6 +27,7 @@ pub const DEFAULT_RELAY_PORT: u16 = 8317;
 
 pub struct Relay {
     token: String,
+    home: PathBuf,
     port: u16,
     connected: AtomicBool,
     client: Mutex<Option<Arc<CdpClient>>>,
@@ -38,6 +39,7 @@ impl Relay {
         let token = load_or_create_token(agent_home)?;
         Ok(Arc::new(Self {
             token,
+            home: agent_home.to_path_buf(),
             port,
             connected: AtomicBool::new(false),
             client: Mutex::new(None),
@@ -55,6 +57,34 @@ impl Relay {
     /// Is a paired extension connected right now?
     pub fn has_extension(&self) -> bool {
         self.connected.load(Ordering::SeqCst)
+    }
+
+    /// Has the extension ever connected on this machine? If so the user's own
+    /// browser is the right target, even when it happens to be closed.
+    pub fn has_paired_before(&self) -> bool {
+        self.paired_marker().is_some_and(|path| path.exists())
+    }
+
+    fn paired_marker(&self) -> Option<PathBuf> {
+        Some(self.home.join("relay-paired"))
+    }
+
+    fn mark_paired(&self) {
+        if let Some(path) = self.paired_marker() {
+            let _ = std::fs::write(path, "the browser extension has connected at least once\n");
+        }
+    }
+
+    /// Wait for the extension to connect, up to `timeout`.
+    pub async fn wait_for_extension(&self, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if self.has_extension() {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        self.has_extension()
     }
 
     /// The CDP client for the connected extension.
@@ -148,6 +178,10 @@ impl Relay {
         let client = CdpClient::from_channels(to_peer, from_peer, "extension");
         *self.client.lock().await = Some(client);
         self.connected.store(true, Ordering::SeqCst);
+        // Remember that this machine has a working extension, so a later run
+        // knows it is worth opening the browser and waiting rather than
+        // falling straight back to a throwaway profile.
+        self.mark_paired();
         eprintln!("\x1b[32m✓ browser extension connected\x1b[0m");
 
         while let Some(Ok(message)) = reader.next().await {

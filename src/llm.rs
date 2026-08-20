@@ -11,7 +11,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::time::Duration;
 
 /// The single tool the model ever sees.
@@ -87,8 +87,10 @@ impl ToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Message {
     pub role: String,
+    /// A plain string for ordinary messages, or an array of content parts when
+    /// images are attached. Providers accept both under the same field.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,7 +101,7 @@ impl Message {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: "system".into(),
-            content: Some(content.into()),
+            content: Some(json!(content.into())),
             ..Default::default()
         }
     }
@@ -107,7 +109,21 @@ impl Message {
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: "user".into(),
-            content: Some(content.into()),
+            content: Some(json!(content.into())),
+            ..Default::default()
+        }
+    }
+
+    /// A user message carrying images alongside its text, in the content-parts
+    /// shape every OpenAI-compatible provider expects.
+    pub fn user_with_images(text: impl Into<String>, images: Vec<String>) -> Self {
+        let mut parts = vec![json!({ "type": "text", "text": text.into() })];
+        for url in images {
+            parts.push(json!({ "type": "image_url", "image_url": { "url": url } }));
+        }
+        Self {
+            role: "user".into(),
+            content: Some(Value::Array(parts)),
             ..Default::default()
         }
     }
@@ -115,7 +131,7 @@ impl Message {
     pub fn assistant(content: Option<String>, tool_calls: Vec<ToolCall>) -> Self {
         Self {
             role: "assistant".into(),
-            content,
+            content: content.map(|text| json!(text)),
             tool_calls,
             ..Default::default()
         }
@@ -124,7 +140,7 @@ impl Message {
     pub fn tool_result(call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: "tool".into(),
-            content: Some(content.into()),
+            content: Some(json!(content.into())),
             tool_call_id: Some(call_id.into()),
             ..Default::default()
         }

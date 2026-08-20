@@ -17,8 +17,27 @@ Everything durable lives in files under your goal directory — the isolate is s
 When an approach fails twice, change strategy instead of retrying. When blocked on one front, advance another.
 Optimize for real-world outcomes per wake, not activity.";
 
+/// What to tell a model that can look at images.
+const VISION_GUIDANCE: &str = "\
+You can see images. `see(path)` puts one in front of you — a file, or the
+base64 that `page.screenshot()` returns — and it arrives on your next turn.
+The accessibility tree is still faster and more precise for ordinary pages, so
+reach for a screenshot when the tree is not enough: canvas and charts, visual
+layout or spacing questions, anything that renders but does not describe
+itself, and pages that are visibly stuck in a way the DOM does not explain.
+Images cost far more than text, so take one deliberately rather than by habit.";
+
+/// What to tell a model that cannot.
+const NO_VISION_GUIDANCE: &str = "\
+You cannot see images. Screenshots are useless to you — never take one hoping
+to read it, and never ask for one to be described. Everything you need about a
+page comes from `page.snapshot()`, `page.text()`, and `page.eval()`, which give
+you the real structure rather than a picture of it. If a page seems to hold
+information you cannot reach that way, query the DOM directly with `page.eval`
+before concluding it is unavailable.";
+
 /// Assemble the full system prompt for a session.
-pub fn system_prompt(goal: &str, goal_dir: &Path, cwd: &Path) -> String {
+pub fn system_prompt(goal: &str, goal_dir: &Path, cwd: &Path, vision: bool) -> String {
     format!(
         r#"{IDENTITY}
 
@@ -76,7 +95,7 @@ await page.click("r3")                     // by ref from the snapshot, or a CSS
 await page.fill("r4", "text"); await page.press("Enter")
 await page.eval(() => document.title)      // run JS inside the page
 await page.waitFor("document.querySelector('.done')")
-await page.screenshot("shot.png")          // only useful if you can see images
+{vision_api}
 
 // scheduling — every wake must end by calling exactly one of these
 wake_in(ms, note)                          // wake yourself after a delay
@@ -93,14 +112,19 @@ CWD        // {cwd}        where you are working
 
 # Working a browser
 
-`page.snapshot()` is your primary way to see a page: it returns the
-accessibility tree with a `[rN]` ref on every element you can act on, and
-`page.click("r3")` acts on those refs through the browser's real input
-pipeline. Prefer it to screenshots and to scraping HTML. When a page changes,
-take a fresh snapshot — refs are only valid for the snapshot that produced them.
-If something is not in the snapshot, fall back to `page.eval` and query the DOM
-directly. The browser may be the user's own, already signed in to their
-accounts; treat what you find there as theirs.
+The browser is usually the user's own — the same one they use, already signed
+in to their accounts. Treat what you find there as theirs: it is fine to use
+sessions that are already open, and it is not fine to change account settings,
+post, send, or purchase unless the goal plainly calls for it.
+
+`page.snapshot()` is how you read a page. It returns the accessibility tree
+with a `[rN]` ref on every element you can act on, and `page.click("r3")` acts
+on those refs through the browser's real input pipeline — pages see trusted
+events, which synthetic DOM clicks do not produce. Take a fresh snapshot after
+the page changes: refs only belong to the snapshot that produced them. When
+something is not in the tree, drop to `page.eval` and query the DOM directly.
+
+{vision_guidance}
 
 # Ledger discipline
 
@@ -118,6 +142,16 @@ rather than polling tightly — an idle wake costs tokens and buys nothing. If y
 are truly finished, call `done` with a summary of what you achieved.
 "#,
         IDENTITY = IDENTITY,
+        vision_api = if vision {
+            "await page.screenshot(\"shot.png\")          // returns base64 png\nsee(pathOrBase64)                          // put an image in front of yourself"
+        } else {
+            "// no screenshot: you cannot see images, so the tree above is the page"
+        },
+        vision_guidance = if vision {
+            VISION_GUIDANCE
+        } else {
+            NO_VISION_GUIDANCE
+        },
         goal = goal,
         goal_dir = goal_dir.display(),
         ledger = goal_dir.join("ledger.md").display(),
@@ -161,4 +195,53 @@ pub fn wake_message(
 
     out.push_str("\nTake the highest-value action toward the goal now.\n");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn rendered(vision: bool) -> String {
+        system_prompt(
+            "test goal",
+            &PathBuf::from("/tmp/goal"),
+            &PathBuf::from("/tmp/work"),
+            vision,
+        )
+    }
+
+    #[test]
+    fn a_blind_model_is_steered_away_from_screenshots() {
+        let prompt = rendered(false);
+        assert!(prompt.contains("You cannot see images"));
+        assert!(
+            !prompt.contains("see(pathOrBase64)"),
+            "the see() tool must not be advertised to a model that cannot use it"
+        );
+        assert!(prompt.contains("page.snapshot()"));
+    }
+
+    #[test]
+    fn a_sighted_model_is_offered_images_but_told_to_prefer_the_tree() {
+        let prompt = rendered(true);
+        assert!(prompt.contains("You can see images"));
+        assert!(prompt.contains("see(pathOrBase64)"));
+        assert!(
+            prompt.contains("still faster and more precise"),
+            "a sighted model should still be told the tree is the default"
+        );
+    }
+
+    #[test]
+    fn both_variants_keep_the_goal_and_the_paths() {
+        for vision in [true, false] {
+            let prompt = rendered(vision);
+            assert!(prompt.contains("test goal"));
+            assert!(prompt.contains("/tmp/goal"));
+            assert!(prompt.contains("/tmp/work"));
+            // The autonomy core must survive in both.
+            assert!(prompt.contains("no human is available"));
+        }
+    }
 }

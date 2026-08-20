@@ -185,6 +185,11 @@
     decide({ type: "on_exit", name: typeof handle === "string" ? handle : handle.name, note: String(note) });
   const done = (summary = "") => decide({ type: "done", summary: String(summary) });
 
+  // Put an image in front of the model. Accepts a file path, the base64 a
+  // screenshot returns, or a data: URI. Only works when the model can see;
+  // otherwise it throws with what to do instead.
+  const see = (imageOrPath) => unwrap(__see(String(imageOrPath)));
+
   const notify = (message, level = "info") => __notify(String(message), String(level));
   const log = (...args) => __emit("stdout", format(args));
 
@@ -451,6 +456,8 @@
 
     /// Save a PNG. Only useful to models that can see; snapshot() is the
     /// primary interface.
+    /// Capture the page. Returns base64 PNG, which `see()` accepts directly:
+    ///   see(await page.screenshot())
     async screenshot(path) {
       const { data } = await this.send("Page.captureScreenshot", { format: "png" });
       if (path) {
@@ -506,7 +513,7 @@
     sh, spawn, processes,
     read, write, ls, exists,
     fetch, sleep,
-    log, notify,
+    log, notify, see,
     wake_in, wake_at, on_exit, done,
     browser, cdp, Page,
   };

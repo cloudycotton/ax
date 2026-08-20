@@ -14,6 +14,7 @@
 //! history is never lost — it is all in the event log for a human to read.
 
 use crate::chrome::BrowserManager;
+use crate::context;
 use crate::event::{EventKind, WakeReason};
 use crate::host::{HostContext, WakeDecision};
 use crate::isolate::Isolate;
@@ -37,6 +38,16 @@ const MAX_TURNS_PER_WAKE: usize = 40;
 /// If the model ends a turn without calling a tool and without scheduling, it
 /// gets this many nudges before the harness schedules for it.
 const MAX_NUDGES: usize = 2;
+
+/// The context ceiling for one wake. Held well below what large models allow:
+/// past this, quality degrades and cost climbs faster than the extra history
+/// is worth, and this architecture would rather start a fresh wake.
+const DEFAULT_CONTEXT_TOKENS: usize = 150_000;
+
+/// Past this fraction of the ceiling the agent is asked to land the wake —
+/// write the ledger, schedule the next one — because a fresh context with a
+/// good ledger beats a compacted one.
+const LAND_THE_WAKE_AT: f64 = 0.7;
 
 pub struct Limits {
     /// Stop the session after this many wakes (`None` = run indefinitely).
@@ -89,6 +100,9 @@ impl Agent {
             session.log.clone(),
             exit_tx,
             browser,
+            // Decided once per session from the model in use: it changes both
+            // what the prompt asks for and whether `see()` works at all.
+            crate::vision::model_sees(llm.model()),
         )?);
         let isolate = Isolate::start(host.clone())?;
         let (inbox_tx, inbox) = mpsc::unbounded_channel();
@@ -228,6 +242,7 @@ impl Agent {
                 &self.session.meta.goal,
                 &self.session.dir,
                 &self.session.meta.cwd,
+                self.host.vision,
             )),
             Message::user(prompt::wake_message(
                 wake,
@@ -238,8 +253,28 @@ impl Agent {
             )),
         ];
 
+        let budget = context_budget();
         let mut nudges = 0usize;
+        let mut asked_to_land = false;
+
         for turn in 0..MAX_TURNS_PER_WAKE {
+            // Compaction is the backstop; the nudge below is the real plan.
+            if let Some(report) = context::compact(&mut messages, budget) {
+                self.session.log.append(EventKind::Compacted {
+                    through_seq: self.session.log.next_seq(),
+                    summary: report.describe(),
+                })?;
+            } else if !asked_to_land
+                && context::estimate_tokens(&messages) as f64 > budget as f64 * LAND_THE_WAKE_AT
+            {
+                asked_to_land = true;
+                messages.push(Message::user(
+                    "You are approaching this wake's context limit. Finish what you are doing, \
+write the ledger, and schedule your next wake — you will resume with a fresh context."
+                        .to_string(),
+                ));
+            }
+
             let completion = self.turn(&mut messages).await?;
 
             // Executing code may have set a decision; that ends the wake.
@@ -363,6 +398,27 @@ wake now."
             };
             messages.push(Message::tool_result(&call.id, body));
 
+            // A `tool` message cannot carry images in the OpenAI schema, so
+            // anything `see()` queued follows as a user message.
+            let images = self.host.take_images();
+            if !images.is_empty() {
+                let count = images.len();
+                self.session.log.append(EventKind::Console {
+                    stream: crate::event::ConsoleStream::Stdout,
+                    text: format!(
+                        "[attached {count} image{} for the model to look at]",
+                        if count == 1 { "" } else { "s" }
+                    ),
+                })?;
+                messages.push(Message::user_with_images(
+                    format!(
+                        "{count} image{} you asked to see, in the order you attached them.",
+                        if count == 1 { "" } else { "s" }
+                    ),
+                    images,
+                ));
+            }
+
             // A decision made mid-turn ends the wake; stop running further calls.
             if self.host.decision_pending() {
                 break;
@@ -439,6 +495,15 @@ wake now."
             }
         }
     }
+}
+
+/// The per-wake context ceiling, overridable for models with smaller windows.
+fn context_budget() -> usize {
+    std::env::var("AX_CONTEXT_TOKENS")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|value| *value >= 4_000)
+        .unwrap_or(DEFAULT_CONTEXT_TOKENS)
 }
 
 fn describe(decision: &WakeDecision) -> String {

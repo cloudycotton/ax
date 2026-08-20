@@ -6,21 +6,11 @@
 mod common;
 
 use ax::agent::{Agent, Limits};
-use ax::chrome::BrowserManager;
 use ax::event::{self, EventKind};
 use ax::llm::{LlmClient, LlmConfig};
-use ax::relay::Relay;
 use ax::session::{Session, Status};
 use common::{Turn, scripted_server};
 use std::time::Duration;
-
-/// A browser manager the tests never connect through. Each gets its own relay
-/// port so the suite can run in parallel.
-fn browser(port: u16) -> std::sync::Arc<BrowserManager> {
-    let home = std::env::temp_dir().join("ax-tests");
-    let relay = Relay::new(&home, port).unwrap();
-    std::sync::Arc::new(BrowserManager::new(home, relay))
-}
 
 fn config_for(base_url: String) -> LlmConfig {
     LlmConfig {
@@ -33,27 +23,10 @@ fn config_for(base_url: String) -> LlmConfig {
     }
 }
 
-/// Point AX_HOME at a scratch directory so tests never touch ~/.ax.
-///
-/// Set exactly once for the whole test binary: `set_var` is process-global, so
-/// tests running concurrently must not each point it somewhere different.
-/// Sessions get distinct ids, so sharing one home is safe.
-fn test_home() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let dir = std::env::temp_dir().join("ax-tests");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        // Safety: this runs before any agent code reads the variable, and the
-        // Once guarantees no concurrent writer.
-        unsafe { std::env::set_var("AX_HOME", &dir) };
-    });
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn runs_a_wake_and_finishes_the_goal() {
     const PORT: u16 = 18411;
-    test_home();
+    common::test_home();
 
     let base_url = scripted_server(vec![
         // First turn: do some real work and record it.
@@ -77,7 +50,7 @@ async fn runs_a_wake_and_finishes_the_goal() {
     let log_path = session.log.path().to_path_buf();
 
     let client = LlmClient::new(config_for(base_url)).unwrap();
-    let mut agent = Agent::new(session, client, Limits::default(), browser(PORT)).unwrap();
+    let mut agent = Agent::new(session, client, Limits::default(), common::browser(PORT)).unwrap();
 
     let result = tokio::time::timeout(Duration::from_secs(60), agent.run()).await;
     assert!(result.is_ok(), "the wake loop hung");
@@ -132,7 +105,7 @@ async fn runs_a_wake_and_finishes_the_goal() {
 #[tokio::test(flavor = "current_thread")]
 async fn state_persists_across_wakes_and_fenced_code_runs() {
     const PORT: u16 = 18412;
-    test_home();
+    common::test_home();
 
     let base_url = scripted_server(vec![
         // Wake 1: leave state behind, then sleep briefly.
@@ -157,7 +130,7 @@ async fn state_persists_across_wakes_and_fenced_code_runs() {
     let log_path = session.log.path().to_path_buf();
 
     let client = LlmClient::new(config_for(base_url)).unwrap();
-    let mut agent = Agent::new(session, client, Limits::default(), browser(PORT)).unwrap();
+    let mut agent = Agent::new(session, client, Limits::default(), common::browser(PORT)).unwrap();
 
     let result = tokio::time::timeout(Duration::from_secs(90), agent.run()).await;
     assert!(result.is_ok(), "the wake loop hung");
@@ -183,7 +156,7 @@ async fn state_persists_across_wakes_and_fenced_code_runs() {
 #[tokio::test(flavor = "current_thread")]
 async fn the_logged_schedule_reflects_the_enforced_floor() {
     const PORT: u16 = 18413;
-    test_home();
+    common::test_home();
 
     let base_url = scripted_server(vec![
         // Ask to wake far sooner than the floor allows.
@@ -202,7 +175,7 @@ async fn the_logged_schedule_reflects_the_enforced_floor() {
         min_wake_interval: Duration::from_secs(2),
         ..Default::default()
     };
-    let mut agent = Agent::new(session, client, limits, browser(PORT)).unwrap();
+    let mut agent = Agent::new(session, client, limits, common::browser(PORT)).unwrap();
 
     let before = chrono::Utc::now();
     tokio::time::timeout(Duration::from_secs(60), agent.run())

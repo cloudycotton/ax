@@ -195,6 +195,14 @@ pub fn show_config() -> Result<()> {
         println!("    endpoint  {}", profile.base_url);
         println!("    key       {}", ui::dim(&profile.redacted_key()));
         println!("    model     {}", profile.model);
+        println!(
+            "    vision    {}",
+            if crate::vision::model_sees(&profile.model) {
+                ui::dim("yes — can look at screenshots and images")
+            } else {
+                ui::dim("no — works from the accessibility tree only")
+            }
+        );
     }
     println!();
     println!(

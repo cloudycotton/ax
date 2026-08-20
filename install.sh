@@ -170,6 +170,18 @@ main() {
   [ -n "$binary" ] || binary="$(find "$tmp" -type f -name ax | head -1)"
   [ -n "$binary" ] || die "the archive did not contain an ax binary"
 
+  # The extension travels with the binary so `ax pair` has something to point
+  # Chrome at.
+  if [ -d "$tmp/extension" ]; then
+    ax_home="${AX_HOME:-$HOME/.ax}"
+    mkdir -p "$ax_home"
+    rm -rf "$ax_home/extension.new"
+    cp -R "$tmp/extension" "$ax_home/extension.new"
+    rm -rf "$ax_home/extension"
+    mv "$ax_home/extension.new" "$ax_home/extension"
+    dim "browser extension unpacked to $ax_home/extension"
+  fi
+
   mkdir -p "$INSTALL_DIR" || die "could not create $INSTALL_DIR"
   # Atomic swap, so an ax that is currently running is never half-replaced.
   install_tmp="$INSTALL_DIR/.ax.new.$$"

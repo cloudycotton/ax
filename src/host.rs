@@ -84,6 +84,11 @@ pub struct HostContext {
     pub exits: mpsc::UnboundedSender<(String, Option<i32>)>,
     /// Lazily-established connection to a browser.
     pub browser: Arc<BrowserManager>,
+    /// Whether the configured model accepts images. Gates `see()`.
+    pub vision: bool,
+    /// Images the agent asked the model to look at, attached to the next
+    /// message and then cleared.
+    pub pending_images: Mutex<Vec<String>>,
 }
 
 impl HostContext {
@@ -93,6 +98,7 @@ impl HostContext {
         log: Arc<EventLog>,
         exits: mpsc::UnboundedSender<(String, Option<i32>)>,
         browser: Arc<BrowserManager>,
+        vision: bool,
     ) -> Result<Self> {
         Ok(Self {
             cwd,
@@ -106,6 +112,8 @@ impl HostContext {
                 .build()?,
             exits,
             browser,
+            vision,
+            pending_images: Mutex::new(Vec::new()),
         })
     }
 
@@ -115,6 +123,24 @@ impl HostContext {
             stream,
             text: text.to_string(),
         });
+    }
+
+    /// Queue an image for the model to look at.
+    pub fn attach_image(&self, data_uri: String) {
+        self.pending_images
+            .lock()
+            .expect("image mutex poisoned")
+            .push(data_uri);
+    }
+
+    /// Take everything queued since the last call.
+    pub fn take_images(&self) -> Vec<String> {
+        std::mem::take(&mut *self.pending_images.lock().expect("image mutex poisoned"))
+    }
+
+    /// Resolve a path the way the agent's own file helpers do.
+    pub fn resolve_path(&self, path: &str) -> PathBuf {
+        self.resolve(path)
     }
 
     pub fn take_decision(&self) -> Option<WakeDecision> {

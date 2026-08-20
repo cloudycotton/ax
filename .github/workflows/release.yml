@@ -50,8 +50,13 @@ jobs:
             version="${version#v}"
           fi
           name="ax-${version}-${{ matrix.target }}.tar.gz"
-          # Archive the bare binary, so `tar -xzf` yields ./ax.
-          tar -czf "$name" -C "target/${{ matrix.target }}/release" ax
+          # Ship the browser extension alongside the binary: `ax pair` needs a
+          # directory to point Chrome at, and someone who installed with
+          # curl | sh has no checkout to find one in.
+          rm -rf pkg && mkdir pkg
+          cp "target/${{ matrix.target }}/release/ax" pkg/
+          cp -R extension pkg/extension
+          tar -czf "$name" -C pkg .
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v7
